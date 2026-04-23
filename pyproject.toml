@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "jax_samplers"
+version = "0.1.0"
+description = "Modular JAX/BlackJAX sampling toolkit"
+requires-python = ">=3.9"
+
+dependencies = [
+  "jax",
+  "jaxlib",
+  "blackjax",
+  "jaxns",
+  "numpy",
+  "scipy",
+  "matplotlib",
+  "corner",
+  "tqdm",
+  "h5py",
+  "pandas"
+]
+
+[project.optional-dependencies]
+plot = ["anesthetic"]
+numpyro = ["numpyro"]
+all = ["anesthetic", "numpyro"]
+
+
+[project.scripts]
+jax-samplers = "jax_samplers.cli:main"

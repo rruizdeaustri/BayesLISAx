@@ -1,0 +1,25 @@
+repo_root: /r5/home/rruiz/projects/sbi/jax_samplers_snakemake
+base_json: /r5/home/rruiz/projects/sbi/jax_samplers_snakemake/examples/json/lisa_gb_transdim.json
+problem_factory: jax_samplers.problems.lisa_gb_transdim_problem:make
+
+scan:
+  kmax_values: [1, 2, 3]
+  n_live: 500
+  tol: 1.0
+  num_inner_steps: 32
+  seeds: [0]
+  skip_plots: true
+
+final:
+  n_live: 1000
+  tol: 1.0
+  num_inner_steps: 64
+  seeds: [0]
+  skip_plots: false
+  no_show: true
+  save_plot: "results/final/b_test/corner.png"
+
+python: /r5/home/rruiz/software/miniconda3/envs/jax_samplers/bin/python
+results_dir: results
+logs_dir: logs
+selection_delta_logz: 1.0

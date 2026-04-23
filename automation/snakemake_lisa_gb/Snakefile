@@ -1,0 +1,177 @@
+import csv
+import json
+from pathlib import Path
+
+configfile: "config.yaml"
+
+RESULTS = config["results_dir"]
+LOGS = config["logs_dir"]
+
+bands = []
+with open("bands.csv", "r", encoding="utf-8") as fh:
+    reader = csv.DictReader(fh)
+    for row in reader:
+        bands.append(
+            {
+                "band_id": row["band_id"],
+                "f_min": float(row["f_min"]),
+                "f_max": float(row["f_max"]),
+            }
+        )
+
+BAND_IDS = [b["band_id"] for b in bands]
+BAND_MAP = {b["band_id"]: b for b in bands}
+
+SCAN_KS = [str(k) for k in config["scan"]["kmax_values"]]
+SCAN_SEEDS = [str(s) for s in config["scan"]["seeds"]]
+FINAL_SEEDS = [str(s) for s in config["final"]["seeds"]]
+
+
+rule all:
+    input:
+        expand(f"{RESULTS}/final/{{band_id}}/done.txt", band_id=BAND_IDS)
+
+
+rule make_scan_config:
+    output:
+        f"{RESULTS}/scan/{{band_id}}/k{{kmax}}/config.json"
+    params:
+        base_json=config["base_json"],
+        f_min=lambda wc: BAND_MAP[wc.band_id]["f_min"],
+        f_max=lambda wc: BAND_MAP[wc.band_id]["f_max"],
+    shell:
+        r"""
+        python scripts/make_band_config.py \
+          --base-json {params.base_json} \
+          --out-json {output} \
+          --f-min {params.f_min} \
+          --f-max {params.f_max} \
+          --kmax {wildcards.kmax}
+        """
+
+rule run_scan_ns:
+    input:
+        cfg=f"{RESULTS}/scan/{{band_id}}/k{{kmax}}/config.json"
+    output:
+        log=f"{LOGS}/scan/{{band_id}}_k{{kmax}}_s{{seed}}.log"
+    params:
+        repo=config["repo_root"],
+        py=config["python"],
+        problem_factory=config["problem_factory"],
+        n_live=config["scan"]["n_live"],
+        tol=config["scan"]["tol"],
+        nis=config["scan"]["num_inner_steps"],
+        skip_plots=("--skip-plots" if config["scan"].get("skip_plots", False) else "")
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p $(dirname {output.log})
+        export JAX_SAMPLERS_CONFIG=$(realpath {input.cfg})
+        PYTHONPATH={params.repo}/src:$PYTHONPATH \
+        {params.py} -m jax_samplers.cli \
+          --algo ns \
+          --problem factory \
+          --problem-factory {params.problem_factory} \
+          --n-live {params.n_live} \
+          --tol {params.tol} \
+          --num-inner-steps {params.nis} \
+          {params.skip_plots} \
+          --seed {wildcards.seed} \
+          > {output.log} 2>&1
+        """
+
+rule summarize_scan:
+    input:
+        lambda wc: [f"{LOGS}/scan/{wc.band_id}_k{k}_s{SCAN_SEEDS[0]}.log" for k in SCAN_KS]
+    output:
+        f"{RESULTS}/scan/{{band_id}}/summary.csv"
+    params:
+        kmaxs=" ".join(SCAN_KS)
+    shell:
+        r"""
+        python scripts/summarize.py \
+          --logs {input} \
+          --kmaxs {params.kmaxs} \
+          --out-csv {output}
+        """
+
+
+rule select_kmax:
+    input:
+        f"{RESULTS}/scan/{{band_id}}/summary.csv"
+    output:
+        f"{RESULTS}/scan/{{band_id}}/selection.json"
+    params:
+        delta=config.get("selection_delta_logz", 1.0)
+    shell:
+        r"""
+        python scripts/select_kmax.py \
+          --summary-csv {input} \
+          --out-json {output} \
+          --delta-logz {params.delta}
+        """
+
+
+rule make_final_config:
+    input:
+        sel=f"{RESULTS}/scan/{{band_id}}/selection.json"
+    output:
+        f"{RESULTS}/final/{{band_id}}/config.json"
+    params:
+        base_json=config["base_json"],
+        f_min=lambda wc: BAND_MAP[wc.band_id]["f_min"],
+        f_max=lambda wc: BAND_MAP[wc.band_id]["f_max"],
+    run:
+        selection = json.loads(Path(input.sel).read_text(encoding="utf-8"))
+        kmax = int(selection["selected_kmax"])
+        shell(
+            "python scripts/make_band_config.py "
+            "--base-json {params.base_json} "
+            "--out-json {output} "
+            "--f-min {params.f_min} "
+            "--f-max {params.f_max} "
+            f"--kmax {kmax}"
+        )
+
+rule run_final_ns:
+    input:
+        cfg=f"{RESULTS}/final/{{band_id}}/config.json"
+    output:
+        log=f"{LOGS}/final/{{band_id}}_s{{seed}}.log"
+    params:
+        repo=config["repo_root"],
+        py=config["python"],
+        problem_factory=config["problem_factory"],
+        n_live=config["final"]["n_live"],
+        tol=config["final"]["tol"],
+        nis=config["final"]["num_inner_steps"],
+        skip_plots=("--skip-plots" if config["final"].get("skip_plots", False) else ""),
+        no_show=("--no-show" if config["final"].get("no_show", False) else ""),
+        save_arg=(f'--save {config["final"]["save_plot"]}' if config["final"].get("save_plot", "") else "")
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p $(dirname {output.log})
+        export JAX_SAMPLERS_CONFIG=$(realpath {input.cfg})
+        PYTHONPATH={params.repo}/src:$PYTHONPATH \
+        {params.py} -m jax_samplers.cli \
+          --algo ns \
+          --problem factory \
+          --problem-factory {params.problem_factory} \
+          --n-live {params.n_live} \
+          --tol {params.tol} \
+          --num-inner-steps {params.nis} \
+          {params.skip_plots} \
+          {params.no_show} \
+          {params.save_arg} \
+          --seed {wildcards.seed} \
+          > {output.log} 2>&1
+        """
+
+rule mark_done:
+    input:
+        lambda wc: [f"{LOGS}/final/{wc.band_id}_s{s}.log" for s in FINAL_SEEDS]
+    output:
+        f"{RESULTS}/final/{{band_id}}/done.txt"
+    shell:
+        "echo done > {output}"

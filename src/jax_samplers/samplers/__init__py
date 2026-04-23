@@ -1,0 +1,11 @@
+# jax_samplers/samplers/__init__.py
+import importlib, pkgutil, pathlib
+
+# auto-import all submodules so their @register_sampler(...) decorators run
+_pkg_path = pathlib.Path(__file__).parent
+_pkg_name = __name__
+
+for m in pkgutil.iter_modules([str(_pkg_path)]):
+    if not m.ispkg:
+        importlib.import_module(f"{_pkg_name}.{m.name}")
+

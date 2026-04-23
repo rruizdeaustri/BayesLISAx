@@ -1,0 +1,15 @@
+{
+  "iso_path": "/r5/home/rruiz/projects/sbi/fermi/data/fits/isotropic_SBI_0d3_200_Front_Back_gtmodel.fits",
+  "iem_path": "/r5/home/rruiz/projects/sbi/fermi/data/fits/IEM_SBI_0d3_200_Front_Back_gtmodel.fits",
+  "exposure_path": "/r5/home/rruiz/projects/sbi/fermi/data/fits/sim_exposure.fits",
+  "counts_path": "/r5/home/rruiz/projects/sbi/fermi/data/fits/sim_counts.fits",
+  "dtype": "float64",
+  "model_dtype": "float32",
+  "psf_size": 40,
+  "psf_sigma": 2,
+  "psf_gamma": 30,  
+  "flux_min": 1e-11,
+  "flux_max": 1e-7,
+  "K_fixed": 3,
+  "allow_bg_fit": false
+}

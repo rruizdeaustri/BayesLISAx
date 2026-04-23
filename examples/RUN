@@ -1,0 +1,22 @@
+python -m jax_samplers.cli  --algo ns --problem factory --problem-factory jax_samplers.problems.lisa_onegb_problem:make --n-live 2000 --tol 0.1 --num-inner-steps 16 --disable-jit --extras '{"dtype": "float32"}'
+
+ python -m jax_samplers.cli --algo numpyro-nuts --problem factory  --problem-factory jax_samplers.problems.lisa_onegb_problem:make  --numpyro-warmup 2000 --numpyro-samples 3000 --numpyro-chains 2 --numpyro-target-accept 0.95 --verbose
+
+python -m jax_samplers.cli   --algo smc-hmc   --problem factory   --problem-factory jax_samplers.problems.lisa_onegb_problem:make   --n-particles 1000   --hmc-num-mcmc-steps 10   --hmc-n-leapfrog 10   --hmc-step-size 3e-3   --hmc-target-ess 0.6 --hmc-verbose --disable-jit
+
+ python -m jax_samplers.cli  --algo jaxns --problem factory --problem-factory jax_samplers.problems.lisa_onegb_problem:make --n-live 1000 --s 5 --max-samples 1e5
+
+ python -m jax_samplers.cli  --algo ns --problem factory --problem-factory jax_samplers.problems.lisa_onegb_problem:make --n-live 2000 --tol 0.1 --num-inner-steps 16
+
+FERMI_DTYPE=float64  python -m jax_samplers.cli --algo pt-rw --problem factory  --problem-factory jax_samplers.problems.lisa_onegb_problem:make  --algo pt-rw --seed 0    --pt-n-replicas 12    --pt-schedule geometric    --pt-beta-min 0.02    --pt-beta-max 1.0    --pt-rw-sigma 0.3    --pt-sweeps 20000   --pt-steps-per-sweep 2    --pt-burn 5000    --pt-thin 5
+
+python -m jax_samplers.cli  --algo ns --problem factory --problem-factory jax_samplers.problems.lisa_onegb_problem:make --n-live 2000 --tol 0.1 --num-inner-steps 16
+
+
+python -m jax_samplers.cli \
+  --algo ns \
+  --problem factory \
+  --problem-factory jax_samplers.problems.lisa_gb_transdim_problem:make \
+  --n-live 2000 \
+  --tol 0.1 \
+  --num-inner-steps 16

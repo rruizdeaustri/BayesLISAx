@@ -1,0 +1,15 @@
+*.egg-info/
+__pycache__/
+*.pyc
+.DS_Store
+*~
+*.backup*
+
+.venv/
+**/.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/

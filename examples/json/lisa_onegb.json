@@ -1,0 +1,26 @@
+{
+  "h5": "/r5/home/rruiz/projects/sbi/lisa/data/LDC2_sangria_training_v2.h5",
+  "cat_idx": 0,
+  "half_bins": 300,
+  "dtype":"float64",
+  "max_batch":1,  
+  "use_tdi2": false,
+  "align_dt": false,
+  "flip_phi0": false,
+  "noise_preset": "MRDv1",
+  "tdi_generation": "TDI1",
+  "noise_det": false,  
+  "marginalize": {
+     "amp_phase": true
+  },
+  "prior_box": {
+    "f0":   [0.001812778642, 0.001814681230],
+    "fdot": [-1.0e-13, 1.0e-13],
+    "iota": [-1.57079632679, 1.57079632679],
+    "psi":  [0, 6.28318530718],
+    "lam":  [0, 6.28318530718],
+    "beta": [-1.57079632679, 1.57079632679]
+  },
+  "debug": false
+}  
+

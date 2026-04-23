@@ -1,0 +1,6 @@
+name: lisa-gb-campaign
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - snakemake>=7.32.4,<10
