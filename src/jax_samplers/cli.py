@@ -79,6 +79,58 @@ def _get_cfg_path(args) -> str:
         return args.config
     return os.environ.get("JAX_SAMPLERS_CONFIG", "")
 
+
+def _extract_prior_bounds(cfg_json: dict, problem) -> tuple:
+    """
+    Try to extract lower/upper bound lists from various sources, in order of preference:
+      1. cfg_json["priors"]["uniform"] — per-parameter dicts, repeated Kmax times if model.Kmax > 1
+      2. cfg_json["prior_box"] — simpler single-source format
+      3. problem.lower / problem.upper attributes
+    Returns (lower_or_None, upper_or_None) as Python lists of floats.
+    """
+    lower = None
+    upper = None
+
+    # 1. Try priors.uniform
+    priors_uniform = cfg_json.get("priors", {}).get("uniform", None)
+    if isinstance(priors_uniform, dict) and priors_uniform:
+        Kmax = int(cfg_json.get("model", {}).get("Kmax", 1))
+        lo_list = []
+        hi_list = []
+        for _name, bounds in priors_uniform.items():
+            if isinstance(bounds, (list, tuple)) and len(bounds) == 2:
+                lo_list.append(float(bounds[0]))
+                hi_list.append(float(bounds[1]))
+        if lo_list:
+            # Repeat Kmax times if multi-source
+            lower = lo_list * Kmax
+            upper = hi_list * Kmax
+            return lower, upper
+
+    # 2. Try prior_box
+    prior_box = cfg_json.get("prior_box", None)
+    if isinstance(prior_box, dict) and prior_box:
+        lo_list = []
+        hi_list = []
+        for _name, bounds in prior_box.items():
+            if isinstance(bounds, (list, tuple)) and len(bounds) == 2:
+                lo_list.append(float(bounds[0]))
+                hi_list.append(float(bounds[1]))
+        if lo_list:
+            lower = lo_list
+            upper = hi_list
+            return lower, upper
+
+    # 3. Try problem attributes
+    lower = getattr(problem, "lower", None)
+    upper = getattr(problem, "upper", None)
+    if lower is not None:
+        lower = [float(x) for x in lower]
+    if upper is not None:
+        upper = [float(x) for x in upper]
+
+    return lower, upper
+
 def _build_parser():
     p = argparse.ArgumentParser(description="jax_samplers CLI")
 
@@ -163,6 +215,14 @@ def _build_parser():
     p.add_argument("--num-inner-steps", type=int, default=0, help="Slice steps per live point; 0 -> auto (3*dim)")
     p.add_argument("--tol", type=float, default=3.0)
     p.add_argument("--max-batch", type=int, default=0, help="(optional) chunk size for batched likelihood")
+    # Hamiltonian NS specific
+    p.add_argument("--ham-dt-ini", type=float, default=0.3, help="Initial step size for Hamiltonian NS")
+    p.add_argument("--ham-min-reflections", type=int, default=2, help="Min reflections for Hamiltonian NS")
+    p.add_argument("--ham-max-reflections", type=int, default=10, help="Max reflections for Hamiltonian NS")
+    p.add_argument("--ham-sigma-vel", type=float, default=0.0, help="Velocity sigma for Hamiltonian NS")
+    p.add_argument("--ham-max-steps", type=int, default=150, help="Max steps for Hamiltonian NS")
+    p.add_argument("--ham-lower", type=str, default="", help="Comma-separated lower bounds for Hamiltonian NS, e.g. '0.0,-1e-13,...'")
+    p.add_argument("--ham-upper", type=str, default="", help="Comma-separated upper bounds for Hamiltonian NS")
 
     # ---------- JAXNS ----------
     p.add_argument("--s", type=int, default=10)
@@ -273,7 +333,7 @@ def main():
         is_product_space_transdim = True
 
     # Auto inner steps for BlackJAX-NS
-    if args.algo == "ns" and (args.num_inner_steps is None or args.num_inner_steps <= 0):
+    if args.algo in ("ns", "dynamic_nss", "ns_hamiltonian") and (args.num_inner_steps is None or args.num_inner_steps <= 0):
         args.num_inner_steps = 3 * problem.dim
 
     # ---------- Build sampler config ----------
@@ -284,6 +344,41 @@ def main():
             num_delete_ratio=args.num_delete_ratio,
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
+        )
+
+    elif args.algo == "dynamic_nss":
+        from .samplers.blackjax_ns import NSConfig
+        cfg = NSConfig(
+            n_live=args.n_live,
+            num_delete_ratio=args.num_delete_ratio,
+            num_inner_steps=args.num_inner_steps,
+            tol=args.tol,
+        )
+
+    elif args.algo == "ns_hamiltonian":
+        from .samplers.blackjax_ns import NSConfig
+
+        # Try to extract lower/upper from JSON config priors
+        lower, upper = _extract_prior_bounds(cfg_json, problem)
+
+        # CLI overrides take precedence
+        if args.ham_lower:
+            lower = [float(x) for x in args.ham_lower.split(",")]
+        if args.ham_upper:
+            upper = [float(x) for x in args.ham_upper.split(",")]
+
+        cfg = NSConfig(
+            n_live=args.n_live,
+            num_delete_ratio=args.num_delete_ratio,
+            num_inner_steps=args.num_inner_steps,
+            tol=args.tol,
+            dt_ini=args.ham_dt_ini,
+            min_reflections=args.ham_min_reflections,
+            max_reflections=args.ham_max_reflections,
+            sigma_vel=args.ham_sigma_vel,
+            ham_max_steps=args.ham_max_steps,
+            lower=lower,
+            upper=upper,
         )
 
     elif args.algo == "jaxns":
