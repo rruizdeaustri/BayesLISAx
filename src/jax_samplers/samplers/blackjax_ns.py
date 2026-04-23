@@ -42,6 +42,15 @@ class NSConfig:
     log_every: int = 10
     profile: bool = False
     profile_dir: str = "./jax_profile"
+    # Hamiltonian NS specific
+    dt_ini: float = 0.3
+    min_reflections: int = 2
+    max_reflections: int = 10
+    sigma_vel: float = 0.0
+    ham_max_steps: int = 150
+    # Bounds for Hamiltonian NS reflections (set from CLI or problem)
+    lower: list | None = None   # list of floats, length = dim
+    upper: list | None = None   # list of floats, length = dim
 
 class BlackJAXNestedSampler:
     def __init__(self, problem: Problem, cfg: NSConfig):
@@ -70,10 +79,14 @@ class BlackJAXNestedSampler:
 
         return logprior_1, loglike_1
 
-    def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
+    def _setup_common(self, key: PRNGKey, problem: Problem | None, cfg_overrides: dict) -> tuple:
+        """Shared setup: update problem/cfg, compute num_delete/num_inner, sample prior.
+
+        Returns (logprior_fn, loglike_fn, init_pts).
+        """
         if problem is not None:
             self.problem = problem
-        for k, v in cfg.items():
+        for k, v in cfg_overrides.items():
             setattr(self.cfg, k, v)
 
         self.key = key
@@ -87,6 +100,21 @@ class BlackJAXNestedSampler:
 
         logprior_fn, loglike_fn = self._make_scalar_fns()
 
+        self.key, sub = jr.split(self.key)
+        init_pts = self.problem.sample_prior(sub, self.cfg.n_live)
+
+        expected = (self.cfg.n_live, self.d)
+        if init_pts.shape != expected:
+            raise ValueError(f"sample_prior returned {init_pts.shape}, expected {expected}")
+
+        _ = self.problem.logprior(jnp.asarray(init_pts[0]).reshape((self.d,)))
+        _ = self.problem.loglikelihood(jnp.asarray(init_pts[0]).reshape((self.d,)))
+
+        return logprior_fn, loglike_fn, init_pts
+
+    def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
+        logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
+
         self.algo = blackjax.nss(
             logprior_fn=logprior_fn,
             loglikelihood_fn=loglike_fn,
@@ -94,41 +122,6 @@ class BlackJAXNestedSampler:
             num_inner_steps=self.num_inner,
         )
 
-        self.key, sub = jr.split(self.key)
-        
-        init_pts = self.problem.sample_prior(sub, self.cfg.n_live)
-
-        #To check
-        """
-        dec0 = self.problem.decode_batch(init_pts, p_active_min=0.5)
-        p = np.asarray(dec0["p"])        # shape (N,K)
-        gu = np.asarray(dec0["g_u"])     # shape (N,K) or None
-
-        print("[prior] p stats  min/mean/max:",
-              float(p.min()), float(p.mean()), float(p.max()))
-        print("[prior] frac(p>0.5):", float((p > 0.5).mean()))
-
-        if gu is not None:
-            print("[prior] g_u stats min/mean/max:",
-                  float(gu.min()), float(gu.mean()), float(gu.max()))
-        print(dec0["pK_vals"], dec0["pK_probs"], "p.mean=", float(np.asarray(dec0["p"]).mean()))    
-        """
-        
-        expected = (self.cfg.n_live, self.d)
-        if init_pts.shape != expected:
-            raise ValueError(f"sample_prior returned {init_pts.shape}, expected {expected}")
-
-        # Python-side sanity checks
-        _ = self.problem.logprior(jnp.asarray(init_pts[0]).reshape((self.d,)))
-        _ = self.problem.loglikelihood(jnp.asarray(init_pts[0]).reshape((self.d,)))
-
-        #lp = jax.vmap(self.problem.logprior)(init_pts)
-        #ll = jax.vmap(self.problem.loglikelihood)(init_pts)
-        #print("finite prior:", bool(jnp.all(jnp.isfinite(lp))))
-        #print("finite like :", bool(jnp.all(jnp.isfinite(ll))))
-        #print("Initial particles shape:", init_pts.shape)
-        #print("Example particle:", init_pts[0])
-        #sys.exit()
         self.state = self.algo.init(init_pts)
         return self
     
@@ -811,3 +804,65 @@ class BlackJAXNestedSamplerFD:
     
 # Register in the plugin registry
 register_sampler("ns")(BlackJAXNestedSampler)
+
+
+class BlackJAXDynamicNSS(BlackJAXNestedSampler):
+    """Dynamic nested sampling using blackjax.dynamic_nss."""
+
+    def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
+        logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
+
+        self.algo = blackjax.dynamic_nss(
+            logprior_fn=logprior_fn,
+            loglikelihood_fn=loglike_fn,
+            num_delete=self.num_delete,
+            num_inner_steps=self.num_inner,
+        )
+
+        self.state = self.algo.init(init_pts)
+        return self
+
+
+class BlackJAXHamiltonianNS(BlackJAXNestedSampler):
+    """Hamiltonian nested sampling using blackjax.ns_hamiltonian."""
+
+    def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
+        logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
+
+        # Resolve lower/upper bounds
+        lower = self.cfg.lower
+        upper = self.cfg.upper
+        if lower is None:
+            lower = getattr(self.problem, "lower", None)
+        if upper is None:
+            upper = getattr(self.problem, "upper", None)
+        if lower is None or upper is None:
+            raise ValueError(
+                "BlackJAXHamiltonianNS requires lower and upper bounds for reflections. "
+                "Pass --ham-lower / --ham-upper on the CLI or set them in the config, "
+                "or ensure your Problem exposes .lower and .upper attributes."
+            )
+
+        lower_arr = jnp.array(lower, dtype=jnp.float64 if jnp.array(lower).dtype == jnp.float64 else jnp.float32)
+        upper_arr = jnp.array(upper, dtype=lower_arr.dtype)
+
+        self.algo = blackjax.ns_hamiltonian(
+            logprior_fn=logprior_fn,
+            loglikelihood_fn=loglike_fn,
+            num_delete=self.num_delete,
+            num_inner_steps=self.num_inner,
+            dt_ini=float(self.cfg.dt_ini),
+            min_reflections=int(self.cfg.min_reflections),
+            max_reflections=int(self.cfg.max_reflections),
+            sigma_vel=float(self.cfg.sigma_vel),
+            max_steps=int(self.cfg.ham_max_steps),
+            lower=lower_arr,
+            upper=upper_arr,
+        )
+
+        self.state = self.algo.init(init_pts)
+        return self
+
+
+register_sampler("dynamic_nss")(BlackJAXDynamicNSS)
+register_sampler("ns_hamiltonian")(BlackJAXHamiltonianNS)
