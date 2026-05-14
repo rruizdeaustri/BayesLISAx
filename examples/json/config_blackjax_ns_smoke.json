@@ -1,0 +1,19 @@
+{
+  "dtype": "float64",
+  "model": {
+    "Kmax": 2,
+    "use_gates": false,
+    "marg_Aphi": true,
+    "marg_mode": "integrate",
+    "log_every": 10
+  },
+  "sampler": {
+    "algo": "dynamic_ggns",
+    "n_live": 100,
+    "num_delete_ratio": 0.2,
+    "num_inner_steps": 12,
+    "tol": 3.0,
+    "ggns_step_size": 0.001,
+    "ggns_num_inner_steps": 1
+  }
+}
