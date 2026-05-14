@@ -33,6 +33,35 @@ def _evidence_view(state):
         f"or integrator={type(integ)}"
     )
 
+
+
+def _resolve_ns_ctor():
+    """Resolve static NSS constructor from top-level or module API."""
+    top = getattr(blackjax, "nss", None)
+    if callable(top):
+        return top
+    ns_mod = getattr(blackjax, "ns", None)
+    nss_mod = getattr(ns_mod, "nss", None)
+    as_top = getattr(nss_mod, "as_top_level_api", None)
+    if callable(as_top):
+        return as_top
+    raise AttributeError("Could not resolve NSS constructor from blackjax.nss or blackjax.ns.nss.as_top_level_api")
+
+
+def _resolve_ggns_ctor():
+    """Resolve static GGNS constructor from top-level or module API."""
+    top = getattr(blackjax, "ggns", None)
+    if callable(top):
+        return top
+    top_static = getattr(blackjax, "static_ggns", None)
+    if callable(top_static):
+        return top_static
+    ns_mod = getattr(blackjax, "ns", None)
+    ggns_mod = getattr(ns_mod, "ggns", None)
+    as_top = getattr(ggns_mod, "as_top_level_api", None)
+    if callable(as_top):
+        return as_top
+    raise AttributeError("Could not resolve GGNS constructor from top-level alias or blackjax.ns.ggns.as_top_level_api")
 @dataclass
 class NSConfig:
     n_live: int = 500
@@ -48,6 +77,9 @@ class NSConfig:
     max_reflections: int = 10
     sigma_vel: float = 0.0
     ham_max_steps: int = 150
+    # GGNS-specific conservative defaults
+    ggns_step_size: float = 0.001
+    ggns_num_inner_steps: int = 1
     # Bounds for Hamiltonian NS reflections (set from CLI or problem)
     lower: list | None = None   # list of floats, length = dim
     upper: list | None = None   # list of floats, length = dim
@@ -115,7 +147,7 @@ class BlackJAXNestedSampler:
     def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
         logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
 
-        self.algo = blackjax.nss(
+        self.algo = _resolve_ns_ctor()(
             logprior_fn=logprior_fn,
             loglikelihood_fn=loglike_fn,
             num_delete=self.num_delete,
@@ -661,7 +693,7 @@ class BlackJAXNestedSamplerTD:
             theta = jnp.asarray(theta).reshape((self.d,))
             return _scalar(self.problem.loglikelihood(theta))
 
-        self.algo = blackjax.nss(
+        self.algo = _resolve_ns_ctor()(
             logprior_fn=logprior_1,
             loglikelihood_fn=loglike_1,
             num_delete=self.num_delete,
@@ -695,7 +727,7 @@ class BlackJAXNestedSamplerFD:
         self.d = self.problem.dim
         self.num_delete = int(self.cfg.num_delete_ratio * self.cfg.n_live)
         self.num_inner = self.cfg.num_inner_steps
-        self.algo = blackjax.nss(
+        self.algo = _resolve_ns_ctor()(
             logprior_fn=self.problem.logprior,
             loglikelihood_fn=self.problem.loglikelihood,
             num_delete=self.num_delete,
@@ -807,20 +839,32 @@ register_sampler("ns")(BlackJAXNestedSampler)
 
 
 class BlackJAXDynamicNSS(BlackJAXNestedSampler):
-    """Dynamic nested sampling using blackjax.dynamic_nss."""
+    """Dynamic posterior refinement scheduler over NSS kernel."""
 
     def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
-        logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
-
-        self.algo = blackjax.dynamic_nss(
-            logprior_fn=logprior_fn,
-            loglikelihood_fn=loglike_fn,
-            num_delete=self.num_delete,
-            num_inner_steps=self.num_inner,
-        )
-
-        self.state = self.algo.init(init_pts)
+        super().init(key=key, problem=problem, **cfg)
         return self
+
+    def run(self, key: PRNGKey | None = None) -> SamplerResult:
+        if self.state is None or self.algo is None:
+            raise RuntimeError("Sampler not initialized. Call init(...) first.")
+        ns_mod = getattr(blackjax, "ns", None)
+        utils_mod = getattr(ns_mod, "utils", None)
+        runner = getattr(utils_mod, "run_dynamic_posterior_scheduler", None)
+        if not callable(runner):
+            raise AttributeError("blackjax.ns.utils.run_dynamic_posterior_scheduler is not available")
+        if key is None:
+            key = self.key
+        self.state, dead = runner(key=key, initial_state=self.state, step_fn=self.algo.step)
+        out = finalise(self.state, dead)
+        parts = np.asarray(out.particles.position)
+        diags: Dict[str, Any] = {
+            "n_live": int(self.cfg.n_live),
+            "num_delete": int(self.num_delete),
+            "num_inner_steps": int(self.num_inner),
+            "dynamic_scheduler": True,
+        }
+        return SamplerResult(samples=parts, weights=None, diagnostics=diags)
 
 
 class BlackJAXHamiltonianNS(BlackJAXNestedSampler):
@@ -864,5 +908,54 @@ class BlackJAXHamiltonianNS(BlackJAXNestedSampler):
         return self
 
 
+
+
+class BlackJAXGGNS(BlackJAXNestedSampler):
+    """Static GGNS using BlackJAX fork API (if available)."""
+
+    def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
+        logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
+        self.algo = _resolve_ggns_ctor()(
+            logprior_fn=logprior_fn,
+            loglikelihood_fn=loglike_fn,
+            num_delete=self.num_delete,
+            num_inner_steps=int(self.cfg.ggns_num_inner_steps),
+            step_size=float(self.cfg.ggns_step_size),
+        )
+        self.state = self.algo.init(init_pts)
+        return self
+
+
+class BlackJAXDynamicGGNS(BlackJAXGGNS):
+    """Dynamic posterior refinement scheduler over GGNS kernel."""
+
+    def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
+        super().init(key=key, problem=problem, **cfg)
+        return self
+
+    def run(self, key: PRNGKey | None = None) -> SamplerResult:
+        if self.state is None or self.algo is None:
+            raise RuntimeError("Sampler not initialized. Call init(...) first.")
+        ns_mod = getattr(blackjax, "ns", None)
+        utils_mod = getattr(ns_mod, "utils", None)
+        runner = getattr(utils_mod, "run_dynamic_posterior_scheduler", None)
+        if not callable(runner):
+            raise AttributeError("blackjax.ns.utils.run_dynamic_posterior_scheduler is not available")
+        if key is None:
+            key = self.key
+        self.state, dead = runner(key=key, initial_state=self.state, step_fn=self.algo.step)
+        out = finalise(self.state, dead)
+        parts = np.asarray(out.particles.position)
+        diags: Dict[str, Any] = {
+            "n_live": int(self.cfg.n_live),
+            "num_delete": int(self.num_delete),
+            "num_inner_steps": int(self.num_inner),
+            "dynamic_scheduler": True,
+        }
+        return SamplerResult(samples=parts, weights=None, diagnostics=diags)
+
+
 register_sampler("dynamic_nss")(BlackJAXDynamicNSS)
 register_sampler("ns_hamiltonian")(BlackJAXHamiltonianNS)
+register_sampler("ggns")(BlackJAXGGNS)
+register_sampler("dynamic_ggns")(BlackJAXDynamicGGNS)
