@@ -48,6 +48,9 @@ class NSConfig:
     max_reflections: int = 10
     sigma_vel: float = 0.0
     ham_max_steps: int = 150
+    # GGNS-specific conservative defaults
+    ggns_step_size: float = 0.001
+    ggns_num_inner_steps: int = 1
     # Bounds for Hamiltonian NS reflections (set from CLI or problem)
     lower: list | None = None   # list of floats, length = dim
     upper: list | None = None   # list of floats, length = dim
@@ -864,5 +867,57 @@ class BlackJAXHamiltonianNS(BlackJAXNestedSampler):
         return self
 
 
+
+
+def _resolve_ggns_ctor(dynamic: bool = False):
+    """Resolve GGNS constructor name from BlackJAX fork variants."""
+    candidates = (
+        ("dynamic_ggns", "ggns_dynamic") if dynamic else ("ggns", "static_ggns"),
+    )[0]
+    for name in candidates:
+        ctor = getattr(blackjax, name, None)
+        if callable(ctor):
+            return ctor, name
+    mode = "dynamic" if dynamic else "static"
+    tried = ", ".join(candidates)
+    raise AttributeError(f"BlackJAX {mode} GGNS constructor not found. Tried: {tried}")
+
+
+class BlackJAXGGNS(BlackJAXNestedSampler):
+    """Static GGNS using BlackJAX fork API (if available)."""
+
+    def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
+        logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
+        ctor, _ = _resolve_ggns_ctor(dynamic=False)
+        self.algo = ctor(
+            logprior_fn=logprior_fn,
+            loglikelihood_fn=loglike_fn,
+            num_delete=self.num_delete,
+            num_inner_steps=int(self.cfg.ggns_num_inner_steps),
+            step_size=float(self.cfg.ggns_step_size),
+        )
+        self.state = self.algo.init(init_pts)
+        return self
+
+
+class BlackJAXDynamicGGNS(BlackJAXNestedSampler):
+    """Dynamic GGNS using BlackJAX fork API (if available)."""
+
+    def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
+        logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
+        ctor, _ = _resolve_ggns_ctor(dynamic=True)
+        self.algo = ctor(
+            logprior_fn=logprior_fn,
+            loglikelihood_fn=loglike_fn,
+            num_delete=self.num_delete,
+            num_inner_steps=int(self.cfg.ggns_num_inner_steps),
+            step_size=float(self.cfg.ggns_step_size),
+        )
+        self.state = self.algo.init(init_pts)
+        return self
+
+
 register_sampler("dynamic_nss")(BlackJAXDynamicNSS)
 register_sampler("ns_hamiltonian")(BlackJAXHamiltonianNS)
+register_sampler("ggns")(BlackJAXGGNS)
+register_sampler("dynamic_ggns")(BlackJAXDynamicGGNS)
