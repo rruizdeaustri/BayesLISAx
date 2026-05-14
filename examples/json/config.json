@@ -1,0 +1,71 @@
+{
+  "dtype": "float64",
+  "data": {
+    "h5": "/r5/home/rruiz/projects/sbi/lisa/data/LDC2_sangria_training_v2.h5",
+    "data_mode": "synthetic_from_catalogue",
+    "cat_idxs": [
+      0,
+      35
+    ],
+    "with_noise": true,
+    "noise_subtract_vgb": true,
+    "decim": 1
+  },
+  "band": {
+    "half_bins": 300,
+    "f_min": 0.00179,
+    "f_max": 0.00186
+  },
+  "model": {
+    "Kmax": 2,
+    "use_gates": false,
+    "order_f0": false,
+    "marg_Aphi": true,
+    "marg_mode": "integrate",
+    "use_tdi2": false,
+    "noise_preset": "MRDv1",
+    "tdi_generation": "TDI1",
+    "n_f_bins": 512,
+    "p_active_min": 0.5,
+    "log_every": 10
+  },
+  "priors": {
+    "uniform": {
+      "fdot": [
+        -1e-13,
+        1e-13
+      ],
+      "iota": [
+        -1.57079632679,
+        1.57079632679
+      ],
+      "psi": [
+        -3.14159265359,
+        3.14159265359
+      ],
+      "lam": [
+        -3.14159265359,
+        3.14159265359
+      ],
+      "beta": [
+        -1.57079632679,
+        1.57079632679
+      ]
+    },
+    "gaussian": {
+      "g": [
+        1,
+        2.5
+      ]
+    }
+  },
+  "plot": {
+    "sample_repr": "gated_raw",
+    "Kmax": 2,
+    "dim_per": 7,
+    "p_index": 6
+  },
+  "debug": {
+    "check_truth_loglike": false
+  }
+}
