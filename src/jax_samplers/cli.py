@@ -381,6 +381,24 @@ def main():
             upper=upper,
         )
 
+    elif args.algo == "ggns":
+        from .samplers.blackjax_ns import NSConfig
+        cfg = NSConfig(
+            n_live=args.n_live,
+            num_delete_ratio=args.num_delete_ratio,
+            num_inner_steps=args.num_inner_steps,
+            tol=args.tol,
+        )
+
+    elif args.algo == "dynamic_ggns":
+        from .samplers.blackjax_ns import NSConfig
+        cfg = NSConfig(
+            n_live=args.n_live,
+            num_delete_ratio=args.num_delete_ratio,
+            num_inner_steps=args.num_inner_steps,
+            tol=args.tol,
+        )
+
     elif args.algo == "jaxns":
         from .samplers.jaxns_unified import JAXNSConfig
         cfg = JAXNSConfig(
@@ -458,6 +476,10 @@ def main():
         sampler = SamplerCls(problem, cfg).init(jr.PRNGKey(args.seed))
 
     # ---------- Run ----------
+    if args.algo in ("ggns", "dynamic_ggns"):
+        print(f"[run] GGNS mode active: algo={args.algo}")
+    if args.algo in ("dynamic_nss", "dynamic_ggns"):
+        print(f"[run] Dynamic NS scheduler active: algo={args.algo}")
     res = sampler.run(jr.PRNGKey(args.seed + 1))
 
     # ---------- Extract samples ----------
