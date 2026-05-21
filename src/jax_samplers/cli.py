@@ -411,7 +411,7 @@ def main():
             refinement_num_steps=args.refinement_num_steps,
             max_batches=args.max_batches,
         )
-        
+
     elif args.algo == "jaxns":
         from .samplers.jaxns_unified import JAXNSConfig
         cfg = JAXNSConfig(
@@ -489,6 +489,10 @@ def main():
         sampler = SamplerCls(problem, cfg).init(jr.PRNGKey(args.seed))
 
     # ---------- Run ----------
+    if args.algo in ("ggns", "dynamic_ggns"):
+        print(f"[run] GGNS mode active: algo={args.algo}")
+    if args.algo in ("dynamic_nss", "dynamic_ggns"):
+        print(f"[run] Dynamic NS scheduler active: algo={args.algo}")
     res = sampler.run(jr.PRNGKey(args.seed + 1))
 
     # ---------- Extract samples ----------
