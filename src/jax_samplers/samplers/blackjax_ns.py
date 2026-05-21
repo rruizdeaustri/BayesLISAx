@@ -80,6 +80,10 @@ class NSConfig:
     # GGNS-specific conservative defaults
     ggns_step_size: float = 0.001
     ggns_num_inner_steps: int = 1
+    # Dynamic NS scheduler defaults
+    initial_num_steps: int = 16
+    refinement_num_steps: int = 8
+    max_batches: int = 3
     # Bounds for Hamiltonian NS reflections (set from CLI or problem)
     lower: list | None = None   # list of floats, length = dim
     upper: list | None = None   # list of floats, length = dim
@@ -848,24 +852,68 @@ class BlackJAXDynamicNSS(BlackJAXNestedSampler):
     def run(self, key: PRNGKey | None = None) -> SamplerResult:
         if self.state is None or self.algo is None:
             raise RuntimeError("Sampler not initialized. Call init(...) first.")
+
         ns_mod = getattr(blackjax, "ns", None)
         utils_mod = getattr(ns_mod, "utils", None)
         runner = getattr(utils_mod, "run_dynamic_posterior_scheduler", None)
         if not callable(runner):
             raise AttributeError("blackjax.ns.utils.run_dynamic_posterior_scheduler is not available")
+
         if key is None:
             key = self.key
-        self.state, dead = runner(key=key, initial_state=self.state, step_fn=self.algo.step)
-        out = finalise(self.state, dead)
-        parts = np.asarray(out.particles.position)
+
+        self.state, dyn = runner(
+            rng_key=key,
+            state=self.state,
+            step_fn=self.algo.step,
+            initial_num_steps=int(self.cfg.initial_num_steps),
+            refinement_num_steps=int(self.cfg.refinement_num_steps),
+            max_batches=int(self.cfg.max_batches),
+        )
+
+        out = dyn.merged
+        #parts_raw = np.asarray(out.dead_particles)
+        #weights = np.asarray(out.posterior_weights)
+
+        dead_particles = out.dead_particles
+
+        # Extract the particle position array from the dynamic merged result.
+        leaves = jax.tree_util.tree_leaves(dead_particles)
+        d = int(self.problem.dim)
+
+        position_candidates = []
+        for leaf in leaves:
+            arr = np.asarray(leaf)
+            if arr.ndim == 2 and arr.shape[0] == np.asarray(out.posterior_weights).shape[0] and arr.shape[1] >= d:
+                position_candidates.append(arr[:, :d])
+
+        if not position_candidates:
+            raise ValueError(
+                "Could not find a position array inside dynamic dead_particles. "
+                f"dead_particles type={type(dead_particles)}, "
+                f"leaf shapes={[np.asarray(x).shape for x in leaves]}"
+            )
+
+        parts_raw = position_candidates[0]
+        weights = np.asarray(out.posterior_weights)
+        
+
+        
         diags: Dict[str, Any] = {
             "n_live": int(self.cfg.n_live),
             "num_delete": int(self.num_delete),
             "num_inner_steps": int(self.num_inner),
             "dynamic_scheduler": True,
+            "dynamic_num_batches": int(len(dyn.batches)),
+            "dynamic_logZ": float(out.logZ),
+            "dynamic_ess": float(out.ess),
+            "initial_num_steps": int(self.cfg.initial_num_steps),
+            "refinement_num_steps": int(self.cfg.refinement_num_steps),
+            "max_batches": int(self.cfg.max_batches),
         }
-        return SamplerResult(samples=parts, weights=None, diagnostics=diags)
 
+        return SamplerResult(samples=parts_raw, weights=weights, diagnostics=diags)
+    
 
 class BlackJAXHamiltonianNS(BlackJAXNestedSampler):
     """Hamiltonian nested sampling using blackjax.ns_hamiltonian."""
@@ -938,29 +986,63 @@ class BlackJAXDynamicGGNS(BlackJAXGGNS):
         utils_mod = getattr(ns_mod, "utils", None)
         runner = getattr(utils_mod, "run_dynamic_posterior_scheduler", None)
         if not callable(runner):
-            raise AttributeError(
-                "blackjax.ns.utils.run_dynamic_posterior_scheduler is not available"
-            )
+            raise AttributeError("blackjax.ns.utils.run_dynamic_posterior_scheduler is not available")
 
         if key is None:
             key = self.key
 
-        self.state, dead = runner(
-            key=key,
-            initial_state=self.state,
+        self.state, dyn = runner(
+            rng_key=key,
+            state=self.state,
             step_fn=self.algo.step,
+            initial_num_steps=int(self.cfg.initial_num_steps),
+            refinement_num_steps=int(self.cfg.refinement_num_steps),
+            max_batches=int(self.cfg.max_batches),
         )
-        out = finalise(self.state, dead)
-        parts = np.asarray(out.particles.position)
 
+        out = dyn.merged
+        #parts_raw = np.asarray(out.dead_particles)
+        #weights = np.asarray(out.posterior_weights)
+
+        dead_particles = out.dead_particles
+
+        # Extract the particle position array from the dynamic merged result.
+        leaves = jax.tree_util.tree_leaves(dead_particles)
+        d = int(self.problem.dim)
+
+        position_candidates = []
+        for leaf in leaves:
+            arr = np.asarray(leaf)
+            if arr.ndim == 2 and arr.shape[0] == np.asarray(out.posterior_weights).shape[0] and arr.shape[1] >= d:
+                position_candidates.append(arr[:, :d])
+
+        if not position_candidates:
+            raise ValueError(
+                "Could not find a position array inside dynamic dead_particles. "
+                f"dead_particles type={type(dead_particles)}, "
+                f"leaf shapes={[np.asarray(x).shape for x in leaves]}"
+            )
+
+        parts_raw = position_candidates[0]
+        weights = np.asarray(out.posterior_weights)
+        
+
+        
         diags: Dict[str, Any] = {
             "n_live": int(self.cfg.n_live),
             "num_delete": int(self.num_delete),
             "num_inner_steps": int(self.num_inner),
             "dynamic_scheduler": True,
+            "dynamic_num_batches": int(len(dyn.batches)),
+            "dynamic_logZ": float(out.logZ),
+            "dynamic_ess": float(out.ess),
+            "initial_num_steps": int(self.cfg.initial_num_steps),
+            "refinement_num_steps": int(self.cfg.refinement_num_steps),
+            "max_batches": int(self.cfg.max_batches),
         }
-        return SamplerResult(samples=parts, weights=None, diagnostics=diags)
 
+        return SamplerResult(samples=parts_raw, weights=weights, diagnostics=diags)
+    
 
 register_sampler("dynamic_nss")(BlackJAXDynamicNSS)
 register_sampler("ns_hamiltonian")(BlackJAXHamiltonianNS)
