@@ -111,14 +111,14 @@ def _extract_optional_ggns_diagnostics(state, dead_pt=None) -> Dict[str, Any]:
 
     return diags
 
-
 def _run_dynamic_scheduler(runner, key, state, step_fn, cfg):
-    """Call dynamic scheduler using the new API, with compatibility fallback."""
-    initial_num_steps = int(getattr(cfg, "num_inner_steps", 0) or 0)
-    refinement_num_steps = int(getattr(cfg, "ggns_num_inner_steps", 0) or initial_num_steps or 1)
-    max_batches = int(getattr(cfg, "max_batch", 0) or 0)
+    """Call dynamic scheduler and always return (state, dynamic_result)."""
+    initial_num_steps = int(getattr(cfg, "initial_num_steps", 16))
+    refinement_num_steps = int(getattr(cfg, "refinement_num_steps", 8))
+    max_batches = int(getattr(cfg, "max_batches", 3))
+
     try:
-        return runner(
+        result = runner(
             rng_key=key,
             state=state,
             step_fn=step_fn,
@@ -127,7 +127,26 @@ def _run_dynamic_scheduler(runner, key, state, step_fn, cfg):
             max_batches=max_batches,
         )
     except TypeError:
-        return runner(key=key, initial_state=state, step_fn=step_fn)
+        try:
+            result = runner(
+                key,
+                state,
+                step_fn,
+                initial_num_steps,
+                refinement_num_steps,
+                max_batches,
+            )
+        except TypeError:
+            result = runner(key=key, initial_state=state, step_fn=step_fn)
+
+    # Current blackjax-ns returns (new_state, NSDynamicResult)
+    if isinstance(result, tuple) and len(result) == 2:
+        return result
+
+    # Fallback for older APIs that may return only dyn
+    new_state = getattr(result, "state", state)
+    return new_state, result
+
 @dataclass
 class NSConfig:
     n_live: int = 500
@@ -929,8 +948,7 @@ class BlackJAXDynamicNSS(BlackJAXNestedSampler):
         if key is None:
             key = self.key
 
-        dyn = _run_dynamic_scheduler(runner, key, self.state, self.algo.step, self.cfg)
-        self.state = getattr(dyn, "state", self.state)
+        self.state, dyn = _run_dynamic_scheduler(runner, key, self.state, self.algo.step, self.cfg)
 
         out = getattr(dyn, "merged", None)
         if out is None:
@@ -1081,8 +1099,7 @@ class BlackJAXDynamicGGNS(BlackJAXGGNS):
         if key is None:
             key = self.key
 
-        dyn = _run_dynamic_scheduler(runner, key, self.state, self.algo.step, self.cfg)
-        self.state = getattr(dyn, "state", self.state)
+        self.state, dyn = _run_dynamic_scheduler(runner, key, self.state, self.algo.step, self.cfg)
 
         out = getattr(dyn, "merged", None)
         if out is None:
