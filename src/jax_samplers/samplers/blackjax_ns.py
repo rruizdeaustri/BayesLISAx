@@ -111,11 +111,15 @@ def _extract_optional_ggns_diagnostics(state, dead_pt=None) -> Dict[str, Any]:
 
     return diags
 
+
 def _run_dynamic_scheduler(runner, key, state, step_fn, cfg):
     """Call dynamic scheduler and always return (state, dynamic_result)."""
-    initial_num_steps = int(getattr(cfg, "initial_num_steps", 16))
-    refinement_num_steps = int(getattr(cfg, "refinement_num_steps", 8))
-    max_batches = int(getattr(cfg, "max_batches", 3))
+    initial_num_steps = int(getattr(cfg, "initial_num_steps", 16) or 16)
+    refinement_num_steps = int(getattr(cfg, "refinement_num_steps", 8) or 8)
+    max_batches = int(getattr(cfg, "max_batches", 3) or 3)
+
+    if max_batches < 1:
+        max_batches = 1
 
     try:
         result = runner(
@@ -139,11 +143,9 @@ def _run_dynamic_scheduler(runner, key, state, step_fn, cfg):
         except TypeError:
             result = runner(key=key, initial_state=state, step_fn=step_fn)
 
-    # Current blackjax-ns returns (new_state, NSDynamicResult)
     if isinstance(result, tuple) and len(result) == 2:
         return result
 
-    # Fallback for older APIs that may return only dyn
     new_state = getattr(result, "state", state)
     return new_state, result
 

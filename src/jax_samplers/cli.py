@@ -217,13 +217,11 @@ def _build_parser():
     p.add_argument("--tol", type=float, default=3.0)
 
     p.add_argument("--max-batch", type=int, default=0, help="(optional) chunk size for batched likelihood")
-    p.add_argument("--initial-num-steps", type=int, default=16)
-    p.add_argument("--refinement-num-steps", type=int, default=8)
-    p.add_argument("--max-batches", type=int, default=3)
-    
-    # --------- GGNS
-    p.add_argument("--ggns-step-size", type=float, default=None)
-    p.add_argument("--ggns-num-inner-steps", type=int, default=None)
+    p.add_argument("--ggns-step-size", type=float, default=1e-3, help="GGNS integration step size")
+    p.add_argument("--ggns-num-inner-steps", type=int, default=1, help="GGNS inner steps")
+    p.add_argument("--initial-num-steps", type=int, default=0, help="Dynamic scheduler initial_num_steps (0 -> auto)")
+    p.add_argument("--refinement-num-steps", type=int, default=0, help="Dynamic scheduler refinement_num_steps (0 -> auto)")
+    p.add_argument("--max-batches", type=int, default=3, help="Dynamic scheduler max_batches")
     # Hamiltonian NS specific
     p.add_argument("--ham-dt-ini", type=float, default=0.3, help="Initial step size for Hamiltonian NS")
     p.add_argument("--ham-min-reflections", type=int, default=2, help="Min reflections for Hamiltonian NS")
@@ -352,6 +350,9 @@ def main():
             num_delete_ratio=args.num_delete_ratio,
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
+            initial_num_steps=(None if args.initial_num_steps <= 0 else args.initial_num_steps),
+            refinement_num_steps=(None if args.refinement_num_steps <= 0 else args.refinement_num_steps),
+            max_batches=max(0, int(args.max_batches)),
         )
 
     elif args.algo == "dynamic_nss":
@@ -360,9 +361,9 @@ def main():
             num_delete_ratio=args.num_delete_ratio,
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
-            initial_num_steps=args.initial_num_steps,
-            refinement_num_steps=args.refinement_num_steps,
-            max_batches=args.max_batches,
+            initial_num_steps=(16 if args.initial_num_steps <= 0 else args.initial_num_steps),
+            refinement_num_steps=(8 if args.refinement_num_steps <= 0 else args.refinement_num_steps),
+            max_batches=max(1, int(args.max_batches)),
         )
 
     elif args.algo == "ns_hamiltonian":
@@ -410,6 +411,31 @@ def main():
             initial_num_steps=args.initial_num_steps,
             refinement_num_steps=args.refinement_num_steps,
             max_batches=args.max_batches,
+        )
+
+    elif args.algo == "ggns":
+        from .samplers.blackjax_ns import NSConfig
+        cfg = NSConfig(
+            n_live=args.n_live,
+            num_delete_ratio=args.num_delete_ratio,
+            num_inner_steps=args.num_inner_steps,
+            tol=args.tol,
+            ggns_step_size=float(args.ggns_step_size),
+            ggns_num_inner_steps=int(args.ggns_num_inner_steps),
+        )
+
+    elif args.algo == "dynamic_ggns":
+        from .samplers.blackjax_ns import NSConfig
+        cfg = NSConfig(
+            n_live=args.n_live,
+            num_delete_ratio=args.num_delete_ratio,
+            num_inner_steps=args.num_inner_steps,
+            tol=args.tol,
+            ggns_step_size=float(args.ggns_step_size),
+            ggns_num_inner_steps=int(args.ggns_num_inner_steps),
+            initial_num_steps=(None if args.initial_num_steps <= 0 else args.initial_num_steps),
+            refinement_num_steps=(None if args.refinement_num_steps <= 0 else args.refinement_num_steps),
+            max_batches=max(0, int(args.max_batches)),
         )
 
     elif args.algo == "jaxns":
