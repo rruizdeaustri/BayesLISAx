@@ -26,16 +26,51 @@ selection_delta_logz: 1.0
 
 benchmark:
   enabled: false
-  algos: [ns, dynamic_nss, ggns, dynamic_ggns]
-  seeds: [0]
-  n_live: [300]
-  tol: [1.0]
-  num_inner_steps: [32]
-  ggns_step_size: [0.001]
-  ggns_num_inner_steps: [1]
-  initial_num_steps: [16]
-  refinement_num_steps: [8]
-  max_batches: [8]
+  preset: smoke
+  algos: []
+  seeds: []
+  n_live: []
+  tol: []
+  num_inner_steps: []
+  ggns_step_size: []
+  ggns_num_inner_steps: []
+  initial_num_steps: []
+  refinement_num_steps: []
+  max_batches: []
   ess_min: 50
   bad_logz_min: -1.0e99
   local_mode_f0_sigma_max: 1.0e-7
+  presets:
+    smoke:
+      algos: [ns]
+      seeds: [0]
+      n_live: [64]
+      tol: [1.0]
+      num_inner_steps: [4]
+      ggns_step_size: [0.001]
+      ggns_num_inner_steps: [1]
+      initial_num_steps: [4]
+      refinement_num_steps: [2]
+      max_batches: [2]
+    pilot:
+      algos: [ns, dynamic_nss]
+      seeds: [0]
+      n_live: [500]
+      tol: [1.0]
+      num_inner_steps: [8]
+      ggns_step_size: [0.001]
+      ggns_num_inner_steps: [1]
+      initial_num_steps: [16]
+      refinement_num_steps: [8]
+      max_batches: [4]
+    production:
+      algos: [ns]
+      seeds: [0]
+      n_live: [2000]
+      tol: [0.1]
+      num_inner_steps: [16]
+      ggns_step_size: [0.001]
+      ggns_num_inner_steps: [1]
+      initial_num_steps: [16]
+      refinement_num_steps: [8]
+      max_batches: [8]

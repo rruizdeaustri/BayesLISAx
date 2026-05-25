@@ -88,6 +88,7 @@ p.add_argument("--ess-min", type=float, default=0)
 p.add_argument("--bad-logz-min", type=float, default=-1e99)
 p.add_argument("--local-mode-f0-sigma-max", type=float, default=1e-7)
 p.add_argument("--skip-plots", action="store_true")
+p.add_argument("--benchmark-preset", default="custom")
 p.add_argument("--out-json", required=True)
 a = p.parse_args()
 
@@ -175,6 +176,9 @@ if cp.returncode == 0:
         if f0_std_vals and max(f0_std_vals) > a.local_mode_f0_sigma_max:
             labels.append("local_mode_suspected")
 
+if str(a.benchmark_preset).lower() == "smoke":
+    labels.append("workflow_smoke_only")
+
 if a.algo in {"ggns", "dynamic_ggns"} and status == "crash":
     labels.append("experimental")
 
@@ -188,6 +192,7 @@ out = {
     "return_code": cp.returncode,
     "status": status,
     "status_labels": labels,
+    "benchmark_preset": a.benchmark_preset,
     "log_path": str(run_log_path),
     "logZ": logz,
     "logZ_std": logz_std,
