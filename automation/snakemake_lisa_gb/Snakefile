@@ -238,9 +238,9 @@ if BENCH_ENABLED:
               --initial-num-steps {wildcards.initial_num_steps} \
               --refinement-num-steps {wildcards.refinement_num_steps} \
               --max-batches {wildcards.max_batches} \
-              --ess-min {params.ess_min} \
-              --bad-logz-min {params.bad_logz_min} \
-              --local-mode-f0-sigma-max {params.local_mode_f0_sigma_max} \
+              --ess-min={params.ess_min} \
+              --bad-logz-min={params.bad_logz_min} \
+              --local-mode-f0-sigma-max={params.local_mode_f0_sigma_max} \
               {params.skip_plots} \
               --out-json {output.summary}
             """

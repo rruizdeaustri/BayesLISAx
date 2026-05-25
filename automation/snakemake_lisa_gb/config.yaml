@@ -1,5 +1,6 @@
-repo_root: /r5/home/rruiz/projects/sbi/jax_samplers_snakemake
-base_json: /r5/home/rruiz/projects/sbi/jax_samplers_snakemake/examples/json/lisa_gb_transdim.json
+repo_root: /r5/home/rruiz/projects/sbi/BayesLISAx
+base_json: /r5/home/rruiz/projects/sbi/BayesLISAx/examples/json/lisa_gb_transdim.json
+python: /r5/home/rruiz/software/miniconda3/envs/blackjax-ns/bin/python
 problem_factory: jax_samplers.problems.lisa_gb_transdim_problem:make
 
 scan:
@@ -19,7 +20,6 @@ final:
   no_show: true
   save_plot: "results/final/b_test/corner.png"
 
-python: /r5/home/rruiz/software/miniconda3/envs/jax_samplers/bin/python
 results_dir: results
 logs_dir: logs
 selection_delta_logz: 1.0
