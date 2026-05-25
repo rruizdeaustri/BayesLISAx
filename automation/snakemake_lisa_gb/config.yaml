@@ -23,3 +23,19 @@ python: /r5/home/rruiz/software/miniconda3/envs/jax_samplers/bin/python
 results_dir: results
 logs_dir: logs
 selection_delta_logz: 1.0
+
+benchmark:
+  enabled: false
+  algos: [ns, dynamic_nss, ggns, dynamic_ggns]
+  seeds: [0]
+  n_live: [300]
+  tol: [1.0]
+  num_inner_steps: [32]
+  ggns_step_size: [0.001]
+  ggns_num_inner_steps: [1]
+  initial_num_steps: [16]
+  refinement_num_steps: [8]
+  max_batches: [8]
+  ess_min: 50
+  bad_logz_min: -1.0e99
+  local_mode_f0_sigma_max: 1.0e-7
