@@ -64,6 +64,8 @@ snakemake --cores 1 --jobs 100 \
 - `results/scan/<band_id>/selection.json`: selected `Kmax`.
 - `logs/final/*.log`: phase-2 logs.
 - `results/final/<band_id>/done.txt`: completion marker.
+- `results/bench/**/summary.json`: per-run benchmark summaries.
+- `results/bench/summary_table.csv`: aggregated benchmark table.
 - `.venv/`: optional local environment with `snakemake` and editable install of this repo package.
 
 ## Notes
@@ -71,6 +73,46 @@ snakemake --cores 1 --jobs 100 \
 - The workflow sets `JAX_SAMPLERS_CONFIG` per run so each job uses the generated JSON config.
 - `scripts/summarize.py` includes regex placeholders; adapt patterns to your actual log format.
 - Plot behavior is configurable in `config.yaml` via `scan.skip_plots`, `final.skip_plots`, and `final.no_show`.
+
+## Benchmark scans (multi-algorithm)
+
+Benchmark mode is optional and preserves the existing two-phase NS workflow by default.
+
+1. Set `benchmark.enabled: true` in `config.yaml`.
+2. Configure scan dimensions in `benchmark.*` lists (`algos`, `seeds`, `n_live`, `tol`, `num_inner_steps`, `ggns_step_size`, `ggns_num_inner_steps`, `initial_num_steps`, `refinement_num_steps`, `max_batches`).
+3. Run:
+
+```bash
+snakemake --cores 1 benchmark_all
+```
+
+Each run writes a compact JSON with runtime, return code, NS diagnostics (when present), and status labels (`pass`, `crash`, `low_ESS`, `bad_logZ`, `local_mode_suspected`). GGNS modes are treated as experimental comparison modes.
+
+### Example command sets
+
+Tiny smoke scan:
+
+```bash
+snakemake --cores 1 benchmark_all \
+  --config benchmark.enabled=true benchmark.algos='["ns","ggns"]' \
+  benchmark.seeds='[0]' benchmark.n_live='[64]' benchmark.num_inner_steps='[8]'
+```
+
+Pilot scan:
+
+```bash
+snakemake --cores 1 benchmark_all \
+  --config benchmark.enabled=true benchmark.algos='["ns","dynamic_nss","ggns"]' \
+  benchmark.seeds='[0,1,2]' benchmark.n_live='[256]' benchmark.num_inner_steps='[16,32]'
+```
+
+Production NS scan:
+
+```bash
+snakemake --cores 1 benchmark_all \
+  --config benchmark.enabled=true benchmark.algos='["ns"]' \
+  benchmark.seeds='[0,1,2,3,4]' benchmark.n_live='[1000]' benchmark.num_inner_steps='[64]' benchmark.tol='[1.0]'
+```
 
 ## Troubleshooting installation
 
