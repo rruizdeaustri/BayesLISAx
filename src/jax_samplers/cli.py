@@ -414,7 +414,6 @@ def main():
         )
 
     elif args.algo == "ggns":
-        from .samplers.blackjax_ns import NSConfig
         cfg = NSConfig(
             n_live=args.n_live,
             num_delete_ratio=args.num_delete_ratio,
@@ -425,7 +424,6 @@ def main():
         )
 
     elif args.algo == "dynamic_ggns":
-        from .samplers.blackjax_ns import NSConfig
         cfg = NSConfig(
             n_live=args.n_live,
             num_delete_ratio=args.num_delete_ratio,
