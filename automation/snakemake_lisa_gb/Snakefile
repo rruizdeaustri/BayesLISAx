@@ -26,6 +26,30 @@ SCAN_KS = [str(k) for k in config["scan"]["kmax_values"]]
 SCAN_SEEDS = [str(s) for s in config["scan"]["seeds"]]
 FINAL_SEEDS = [str(s) for s in config["final"]["seeds"]]
 
+BENCH = config.get("benchmark", {})
+BENCH_ENABLED = bool(BENCH.get("enabled", False))
+BENCH_PRESETS = BENCH.get("presets", {})
+BENCH_PRESET_NAME = str(BENCH.get("preset", "smoke"))
+BENCH_PRESET = BENCH_PRESETS.get(BENCH_PRESET_NAME, {})
+
+def _bench_list(key, fallback=None):
+    explicit = BENCH.get(key, None)
+    if explicit not in (None, []):
+        return [str(x) for x in explicit]
+    preset_vals = BENCH_PRESET.get(key, fallback if fallback is not None else [])
+    return [str(x) for x in preset_vals]
+
+BENCH_ALGOS = _bench_list("algos")
+BENCH_SEEDS = _bench_list("seeds")
+BENCH_NLIVE = _bench_list("n_live")
+BENCH_TOL = _bench_list("tol")
+BENCH_NIS = _bench_list("num_inner_steps")
+BENCH_GSTEP = _bench_list("ggns_step_size", [0.001])
+BENCH_GNIS = _bench_list("ggns_num_inner_steps", [1])
+BENCH_INIT = _bench_list("initial_num_steps", [16])
+BENCH_REFIN = _bench_list("refinement_num_steps", [8])
+BENCH_BATCH = _bench_list("max_batches", [8])
+
 
 rule all:
     input:
@@ -175,3 +199,76 @@ rule mark_done:
         f"{RESULTS}/final/{{band_id}}/done.txt"
     shell:
         "echo done > {output}"
+
+
+if BENCH_ENABLED:
+    rule benchmark_all:
+        input:
+            expand(
+                f"{RESULTS}/bench/{{band_id}}/algo={{algo}}/seed={{seed}}/nlive={{n_live}}/tol={{tol}}/nis={{num_inner_steps}}/gstep={{ggns_step_size}}/gnis={{ggns_num_inner_steps}}/init={{initial_num_steps}}/ref={{refinement_num_steps}}/batches={{max_batches}}/summary.json",
+                band_id=BAND_IDS,
+                algo=BENCH_ALGOS,
+                seed=BENCH_SEEDS,
+                n_live=BENCH_NLIVE,
+                tol=BENCH_TOL,
+                num_inner_steps=BENCH_NIS,
+                ggns_step_size=BENCH_GSTEP,
+                ggns_num_inner_steps=BENCH_GNIS,
+                initial_num_steps=BENCH_INIT,
+                refinement_num_steps=BENCH_REFIN,
+                max_batches=BENCH_BATCH,
+            ),
+            f"{RESULTS}/bench/summary_table.csv"
+
+    rule run_benchmark_case:
+        input:
+            cfg=f"{RESULTS}/final/{{band_id}}/config.json"
+        output:
+            summary=f"{RESULTS}/bench/{{band_id}}/algo={{algo}}/seed={{seed}}/nlive={{n_live}}/tol={{tol}}/nis={{num_inner_steps}}/gstep={{ggns_step_size}}/gnis={{ggns_num_inner_steps}}/init={{initial_num_steps}}/ref={{refinement_num_steps}}/batches={{max_batches}}/summary.json"
+        params:
+            repo=config["repo_root"], py=config["python"],
+            problem_factory=config["problem_factory"],
+            skip_plots=("--skip-plots" if BENCH.get("skip_plots", True) else ""),
+            ess_min=BENCH.get("ess_min", 0),
+            bad_logz_min=BENCH.get("bad_logz_min", -1.0e99),
+            local_mode_f0_sigma_max=BENCH.get("local_mode_f0_sigma_max", 1.0e-7),
+            benchmark_preset=BENCH_PRESET_NAME
+        shell:
+            r"""
+            python scripts/run_benchmark.py \
+              --python {params.py} \
+              --repo-root {params.repo} \
+              --problem-factory {params.problem_factory} \
+              --config-json {input.cfg} \
+              --algo {wildcards.algo} \
+              --seed {wildcards.seed} \
+              --n-live {wildcards.n_live} \
+              --tol {wildcards.tol} \
+              --num-inner-steps {wildcards.num_inner_steps} \
+              --ggns-step-size {wildcards.ggns_step_size} \
+              --ggns-num-inner-steps {wildcards.ggns_num_inner_steps} \
+              --initial-num-steps {wildcards.initial_num_steps} \
+              --refinement-num-steps {wildcards.refinement_num_steps} \
+              --max-batches {wildcards.max_batches} \
+              --ess-min {params.ess_min} \
+              --bad-logz-min {params.bad_logz_min} \
+              --local-mode-f0-sigma-max {params.local_mode_f0_sigma_max} \
+              --benchmark-preset {params.benchmark_preset} \
+              {params.skip_plots} \
+              --out-json {output.summary}
+            """
+
+    rule aggregate_benchmarks:
+        input:
+            expand(
+                f"{RESULTS}/bench/{{band_id}}/algo={{algo}}/seed={{seed}}/nlive={{n_live}}/tol={{tol}}/nis={{num_inner_steps}}/gstep={{ggns_step_size}}/gnis={{ggns_num_inner_steps}}/init={{initial_num_steps}}/ref={{refinement_num_steps}}/batches={{max_batches}}/summary.json",
+                band_id=BAND_IDS, algo=BENCH_ALGOS, seed=BENCH_SEEDS,
+                n_live=BENCH_NLIVE, tol=BENCH_TOL, num_inner_steps=BENCH_NIS,
+                ggns_step_size=BENCH_GSTEP, ggns_num_inner_steps=BENCH_GNIS,
+                initial_num_steps=BENCH_INIT, refinement_num_steps=BENCH_REFIN,
+                max_batches=BENCH_BATCH,
+            )
+        output:
+            f"{RESULTS}/bench/summary_table.csv"
+        shell:
+            "python scripts/aggregate_benchmarks.py --inputs {input} --out-csv {output}"

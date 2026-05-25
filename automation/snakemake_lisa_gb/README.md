@@ -64,6 +64,8 @@ snakemake --cores 1 --jobs 100 \
 - `results/scan/<band_id>/selection.json`: selected `Kmax`.
 - `logs/final/*.log`: phase-2 logs.
 - `results/final/<band_id>/done.txt`: completion marker.
+- `results/bench/**/summary.json`: per-run benchmark summaries.
+- `results/bench/summary_table.csv`: aggregated benchmark table.
 - `.venv/`: optional local environment with `snakemake` and editable install of this repo package.
 
 ## Notes
@@ -71,6 +73,50 @@ snakemake --cores 1 --jobs 100 \
 - The workflow sets `JAX_SAMPLERS_CONFIG` per run so each job uses the generated JSON config.
 - `scripts/summarize.py` includes regex placeholders; adapt patterns to your actual log format.
 - Plot behavior is configurable in `config.yaml` via `scan.skip_plots`, `final.skip_plots`, and `final.no_show`.
+
+## Benchmark scans (multi-algorithm)
+
+Benchmark mode is optional and preserves the existing two-phase NS workflow by default.
+
+1. Set `benchmark.enabled: true` in `config.yaml`.
+2. Select a preset with `benchmark.preset` (`smoke`, `pilot`, `production`).
+3. Optionally override any preset dimension by setting explicit `benchmark.*` arrays (`algos`, `seeds`, `n_live`, `tol`, `num_inner_steps`, `ggns_step_size`, `ggns_num_inner_steps`, `initial_num_steps`, `refinement_num_steps`, `max_batches`).
+3. Run:
+
+```bash
+snakemake --cores 1 benchmark_all
+```
+
+Each run writes a compact JSON with runtime, return code, NS diagnostics (when present), and status labels (`pass`, `crash`, `low_ESS`, `bad_logZ`, `local_mode_suspected`). For `smoke` preset runs, summaries include `workflow_smoke_only` to make clear they are **workflow checks only** and not scientific validation. GGNS and dynamic GGNS are treated as experimental comparison modes.
+
+### Preset intent
+
+- `smoke`: tiny/fast workflow-only validation; do **not** interpret physically (local mode recovery is expected at low resolution).
+- `pilot`: moderate settings for rough algorithm/configuration comparisons.
+- `production`: trusted static NS benchmark settings for scientific validation.
+
+### Example command sets
+
+Tiny smoke scan:
+
+```bash
+snakemake --cores 1 benchmark_all \
+  --config benchmark.enabled=true benchmark.preset=smoke
+```
+
+Pilot scan:
+
+```bash
+snakemake --cores 1 benchmark_all \
+  --config benchmark.enabled=true benchmark.preset=pilot
+```
+
+Production NS scan:
+
+```bash
+snakemake --cores 1 benchmark_all \
+  --config benchmark.enabled=true benchmark.preset=production
+```
 
 ## Troubleshooting installation
 
