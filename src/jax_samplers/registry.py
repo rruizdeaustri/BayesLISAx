@@ -45,7 +45,6 @@ from .samplers import elliptical_slice
 from .samplers import pt_rw
 from .samplers import rj_mh
 from .samplers import rj_es
-from .samplers import numpyro_nuts
 
 # Lazy JAXNS: only imported if requested
 def _lazy_jaxns():
@@ -53,6 +52,14 @@ def _lazy_jaxns():
     return mod.JAXNSConfig
 
 register_sampler("jaxns", _lazy_jaxns)
+
+# Optional NumPyro NUTS backend: import only when requested
+def _lazy_numpyro_nuts():
+    mod = importlib.import_module("jax_samplers.samplers.numpyro_nuts")
+    return mod.NumPyroNUTSBackend
+
+register_sampler("numpyro-nuts", _lazy_numpyro_nuts)
+
 
 
 

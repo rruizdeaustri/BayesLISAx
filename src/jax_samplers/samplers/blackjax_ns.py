@@ -33,6 +33,122 @@ def _evidence_view(state):
         f"or integrator={type(integ)}"
     )
 
+
+
+def _resolve_ns_ctor():
+    """Resolve static NSS constructor from top-level or module API."""
+    top = getattr(blackjax, "nss", None)
+    if callable(top):
+        return top
+    ns_mod = getattr(blackjax, "ns", None)
+    nss_mod = getattr(ns_mod, "nss", None)
+    as_top = getattr(nss_mod, "as_top_level_api", None)
+    if callable(as_top):
+        return as_top
+    raise AttributeError("Could not resolve NSS constructor from blackjax.nss or blackjax.ns.nss.as_top_level_api")
+
+
+def _resolve_ggns_ctor():
+    """Resolve static GGNS constructor from top-level or module API."""
+    top = getattr(blackjax, "ggns", None)
+    if callable(top):
+        return top
+    top_static = getattr(blackjax, "static_ggns", None)
+    if callable(top_static):
+        return top_static
+    ns_mod = getattr(blackjax, "ns", None)
+    ggns_mod = getattr(ns_mod, "ggns", None)
+    as_top = getattr(ggns_mod, "as_top_level_api", None)
+    if callable(as_top):
+        return as_top
+    raise AttributeError("Could not resolve GGNS constructor from top-level alias or blackjax.ns.ggns.as_top_level_api")
+
+
+def _to_float_or_none(x):
+    if x is None:
+        return None
+    try:
+        return float(np.asarray(x))
+    except Exception:
+        return None
+
+
+def _extract_optional_ggns_diagnostics(state, dead_pt=None) -> Dict[str, Any]:
+    """Best-effort extraction of GGNS-specific diagnostics from state/dead point."""
+    diags: Dict[str, Any] = {}
+
+    holders = [h for h in (state, getattr(state, "integrator", None), dead_pt) if h is not None]
+    field_aliases = {
+        "delta_loglikelihood": ("delta_loglikelihood", "delta_logL"),
+        "valid_path_fraction": ("valid_path_fraction",),
+        "sampled_path_index": ("sampled_path_index",),
+        "reflection_count": ("reflection_count", "n_reflections", "num_reflections"),
+        "reflection_fraction": ("reflection_fraction", "reflected_fraction"),
+        "reflection_failure_rate": ("reflection_failure_rate", "reflection_fail_rate"),
+    }
+
+    for out_key, aliases in field_aliases.items():
+        val = None
+        for holder in holders:
+            for name in aliases:
+                candidate = getattr(holder, name, None)
+                if candidate is not None:
+                    val = candidate
+                    break
+            if val is not None:
+                break
+        if val is None:
+            continue
+
+        if out_key in ("sampled_path_index", "reflection_count"):
+            try:
+                diags[out_key] = int(np.asarray(val))
+            except Exception:
+                diags[out_key] = val
+        else:
+            cast = _to_float_or_none(val)
+            diags[out_key] = cast if cast is not None else val
+
+    return diags
+
+
+def _run_dynamic_scheduler(runner, key, state, step_fn, cfg):
+    """Call dynamic scheduler and always return (state, dynamic_result)."""
+    initial_num_steps = int(getattr(cfg, "initial_num_steps", 16) or 16)
+    refinement_num_steps = int(getattr(cfg, "refinement_num_steps", 8) or 8)
+    max_batches = int(getattr(cfg, "max_batches", 3) or 3)
+
+    if max_batches < 1:
+        max_batches = 1
+
+    try:
+        result = runner(
+            rng_key=key,
+            state=state,
+            step_fn=step_fn,
+            initial_num_steps=initial_num_steps,
+            refinement_num_steps=refinement_num_steps,
+            max_batches=max_batches,
+        )
+    except TypeError:
+        try:
+            result = runner(
+                key,
+                state,
+                step_fn,
+                initial_num_steps,
+                refinement_num_steps,
+                max_batches,
+            )
+        except TypeError:
+            result = runner(key=key, initial_state=state, step_fn=step_fn)
+
+    if isinstance(result, tuple) and len(result) == 2:
+        return result
+
+    new_state = getattr(result, "state", state)
+    return new_state, result
+
 @dataclass
 class NSConfig:
     n_live: int = 500
@@ -48,6 +164,13 @@ class NSConfig:
     max_reflections: int = 10
     sigma_vel: float = 0.0
     ham_max_steps: int = 150
+    # GGNS-specific conservative defaults
+    ggns_step_size: float = 0.001
+    ggns_num_inner_steps: int = 1
+    # Dynamic NS scheduler defaults
+    initial_num_steps: int = 16
+    refinement_num_steps: int = 8
+    max_batches: int = 3
     # Bounds for Hamiltonian NS reflections (set from CLI or problem)
     lower: list | None = None   # list of floats, length = dim
     upper: list | None = None   # list of floats, length = dim
@@ -115,7 +238,7 @@ class BlackJAXNestedSampler:
     def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
         logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
 
-        self.algo = blackjax.nss(
+        self.algo = _resolve_ns_ctor()(
             logprior_fn=logprior_fn,
             loglikelihood_fn=loglike_fn,
             num_delete=self.num_delete,
@@ -232,6 +355,7 @@ class BlackJAXNestedSampler:
             "n_live": int(self.cfg.n_live),
             "num_delete": int(self.num_delete),
             "num_inner_steps": int(self.num_inner),
+            "kernel": "ns",
         }
         if has_logz:
             diags["logZ"] = float(self.state.logZ)
@@ -661,7 +785,7 @@ class BlackJAXNestedSamplerTD:
             theta = jnp.asarray(theta).reshape((self.d,))
             return _scalar(self.problem.loglikelihood(theta))
 
-        self.algo = blackjax.nss(
+        self.algo = _resolve_ns_ctor()(
             logprior_fn=logprior_1,
             loglikelihood_fn=loglike_1,
             num_delete=self.num_delete,
@@ -695,7 +819,7 @@ class BlackJAXNestedSamplerFD:
         self.d = self.problem.dim
         self.num_delete = int(self.cfg.num_delete_ratio * self.cfg.n_live)
         self.num_inner = self.cfg.num_inner_steps
-        self.algo = blackjax.nss(
+        self.algo = _resolve_ns_ctor()(
             logprior_fn=self.problem.logprior,
             loglikelihood_fn=self.problem.loglikelihood,
             num_delete=self.num_delete,
@@ -807,20 +931,88 @@ register_sampler("ns")(BlackJAXNestedSampler)
 
 
 class BlackJAXDynamicNSS(BlackJAXNestedSampler):
-    """Dynamic nested sampling using blackjax.dynamic_nss."""
+    """Dynamic posterior refinement scheduler over NSS kernel."""
 
     def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
-        logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
-
-        self.algo = blackjax.dynamic_nss(
-            logprior_fn=logprior_fn,
-            loglikelihood_fn=loglike_fn,
-            num_delete=self.num_delete,
-            num_inner_steps=self.num_inner,
-        )
-
-        self.state = self.algo.init(init_pts)
+        super().init(key=key, problem=problem, **cfg)
         return self
+
+    def run(self, key: PRNGKey | None = None) -> SamplerResult:
+        if self.state is None or self.algo is None:
+            raise RuntimeError("Sampler not initialized. Call init(...) first.")
+
+        ns_mod = getattr(blackjax, "ns", None)
+        utils_mod = getattr(ns_mod, "utils", None)
+        runner = getattr(utils_mod, "run_dynamic_posterior_scheduler", None)
+        if not callable(runner):
+            raise AttributeError("blackjax.ns.utils.run_dynamic_posterior_scheduler is not available")
+
+        if key is None:
+            key = self.key
+
+        self.state, dyn = _run_dynamic_scheduler(runner, key, self.state, self.algo.step, self.cfg)
+
+        out = getattr(dyn, "merged", None)
+        if out is None:
+            raise RuntimeError("Dynamic scheduler did not return a merged result.")
+
+        dead_particles = out.dead_particles
+        weights = np.asarray(out.posterior_weights)
+
+        leaves = jax.tree_util.tree_leaves(dead_particles)
+        d = int(self.problem.dim)
+
+        position_candidates = []
+        for leaf in leaves:
+            arr = np.asarray(leaf)
+            if arr.ndim == 2 and arr.shape[0] == weights.shape[0] and arr.shape[1] >= d:
+                position_candidates.append(arr[:, :d])
+
+        if not position_candidates:
+            raise ValueError(
+                "Could not find a position array inside dynamic dead_particles. "
+                f"dead_particles type={type(dead_particles)}, "
+                f"leaf shapes={[np.asarray(x).shape for x in leaves]}"
+            )
+
+        parts_u = position_candidates[0]
+        parts = parts_u
+
+        p_active_min = getattr(self.problem, "p_active_min", 1e-3)
+        decode_fn = getattr(self.problem, "decode_batch", None)
+        if callable(decode_fn):
+            try:
+                dec = decode_fn(parts_u, p_active_min=float(p_active_min), sort_by="f0")
+                parts = dec.get("flat_phys", parts_u)
+            except Exception:
+                parts = parts_u
+
+        diags: Dict[str, Any] = {
+            "n_live": int(self.cfg.n_live),
+            "num_delete": int(self.num_delete),
+            "num_inner_steps": int(self.num_inner),
+            "kernel": "dynamic_nss",
+            "dynamic_scheduler": True,
+            "dynamic_num_batches": int(len(getattr(dyn, "batches", ()))),
+            "dynamic_logZ": float(out.logZ) if hasattr(out, "logZ") else None,
+            "dynamic_ess": float(out.ess) if hasattr(out, "ess") else None,
+            "dynamic_initial_num_steps": int(self.cfg.initial_num_steps),
+            "dynamic_refinement_num_steps": int(self.cfg.refinement_num_steps),
+            "dynamic_max_batches": int(self.cfg.max_batches),
+            "dynamic_merged_samples": int(parts_u.shape[0]),
+            "dynamic_merged_weight_sum": float(np.sum(weights)),
+        }
+
+        ev = None
+        try:
+            ev = _evidence_view(self.state)
+        except Exception:
+            ev = None
+        if ev is not None:
+            diags["logZ"] = float(ev.logZ)
+            diags["logZ_live"] = float(ev.logZ_live)
+
+        return SamplerResult(samples=parts, weights=weights, diagnostics=diags)
 
 
 class BlackJAXHamiltonianNS(BlackJAXNestedSampler):
@@ -863,6 +1055,123 @@ class BlackJAXHamiltonianNS(BlackJAXNestedSampler):
         self.state = self.algo.init(init_pts)
         return self
 
+class BlackJAXGGNS(BlackJAXNestedSampler):
+    """Static GGNS using BlackJAX fork API (if available)."""
 
+    def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
+        logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
+        self.algo = _resolve_ggns_ctor()(
+            logprior_fn=logprior_fn,
+            loglikelihood_fn=loglike_fn,
+            num_delete=self.num_delete,
+            num_inner_steps=int(self.cfg.ggns_num_inner_steps),
+            step_size=float(self.cfg.ggns_step_size),
+        )
+        self.state = self.algo.init(init_pts)
+        return self
+
+    def run(self, key: PRNGKey | None = None) -> SamplerResult:
+        res = super().run(key=key)
+        diags: Dict[str, Any] = dict(getattr(res, "diagnostics", {}) or {})
+        diags["kernel"] = "ggns"
+        diags["ggns_step_size"] = float(self.cfg.ggns_step_size)
+        diags["ggns_num_inner_steps"] = int(self.cfg.ggns_num_inner_steps)
+        diags.update(_extract_optional_ggns_diagnostics(self.state))
+        print(f"[GGNS] diagnostics: {diags}")
+        res.diagnostics = diags
+        return res
+
+class BlackJAXDynamicGGNS(BlackJAXGGNS):
+    """Dynamic posterior refinement scheduler over GGNS kernel."""
+
+    def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
+        super().init(key=key, problem=problem, **cfg)
+        return self
+
+    def run(self, key: PRNGKey | None = None) -> SamplerResult:
+        if self.state is None or self.algo is None:
+            raise RuntimeError("Sampler not initialized. Call init(...) first.")
+
+        ns_mod = getattr(blackjax, "ns", None)
+        utils_mod = getattr(ns_mod, "utils", None)
+        runner = getattr(utils_mod, "run_dynamic_posterior_scheduler", None)
+        if not callable(runner):
+            raise AttributeError("blackjax.ns.utils.run_dynamic_posterior_scheduler is not available")
+
+        if key is None:
+            key = self.key
+
+        self.state, dyn = _run_dynamic_scheduler(runner, key, self.state, self.algo.step, self.cfg)
+
+        out = getattr(dyn, "merged", None)
+        if out is None:
+            raise RuntimeError("Dynamic scheduler did not return a merged result.")
+
+        dead_particles = out.dead_particles
+        weights = np.asarray(out.posterior_weights)
+
+        leaves = jax.tree_util.tree_leaves(dead_particles)
+        d = int(self.problem.dim)
+
+        position_candidates = []
+        for leaf in leaves:
+            arr = np.asarray(leaf)
+            if arr.ndim == 2 and arr.shape[0] == weights.shape[0] and arr.shape[1] >= d:
+                position_candidates.append(arr[:, :d])
+
+        if not position_candidates:
+            raise ValueError(
+                "Could not find a position array inside dynamic dead_particles. "
+                f"dead_particles type={type(dead_particles)}, "
+                f"leaf shapes={[np.asarray(x).shape for x in leaves]}"
+            )
+
+        parts_u = position_candidates[0]
+        parts = parts_u
+
+        p_active_min = getattr(self.problem, "p_active_min", 1e-3)
+        decode_fn = getattr(self.problem, "decode_batch", None)
+        if callable(decode_fn):
+            try:
+                dec = decode_fn(parts_u, p_active_min=float(p_active_min), sort_by="f0")
+                parts = dec.get("flat_phys", parts_u)
+            except Exception:
+                parts = parts_u
+
+        diags: Dict[str, Any] = {
+            "n_live": int(self.cfg.n_live),
+            "num_delete": int(self.num_delete),
+            "num_inner_steps": int(self.num_inner),
+            "kernel": "dynamic_ggns",
+            "dynamic_scheduler": True,
+            "ggns_step_size": float(self.cfg.ggns_step_size),
+            "ggns_num_inner_steps": int(self.cfg.ggns_num_inner_steps),
+            "dynamic_num_batches": int(len(getattr(dyn, "batches", ()))),
+            "dynamic_logZ": float(out.logZ) if hasattr(out, "logZ") else None,
+            "dynamic_ess": float(out.ess) if hasattr(out, "ess") else None,
+            "dynamic_initial_num_steps": int(self.cfg.initial_num_steps),
+            "dynamic_refinement_num_steps": int(self.cfg.refinement_num_steps),
+            "dynamic_max_batches": int(self.cfg.max_batches),
+            "dynamic_merged_samples": int(parts_u.shape[0]),
+            "dynamic_merged_weight_sum": float(np.sum(weights)),
+        }
+
+        ev = None
+        try:
+            ev = _evidence_view(self.state)
+        except Exception:
+            ev = None
+        if ev is not None:
+            diags["logZ"] = float(ev.logZ)
+            diags["logZ_live"] = float(ev.logZ_live)
+
+        diags.update(_extract_optional_ggns_diagnostics(self.state))
+        print(f"[GGNS] diagnostics: {diags}")
+
+        return SamplerResult(samples=parts, weights=weights, diagnostics=diags)
+    
 register_sampler("dynamic_nss")(BlackJAXDynamicNSS)
 register_sampler("ns_hamiltonian")(BlackJAXHamiltonianNS)
+register_sampler("ggns")(BlackJAXGGNS)
+register_sampler("dynamic_ggns")(BlackJAXDynamicGGNS)
+            

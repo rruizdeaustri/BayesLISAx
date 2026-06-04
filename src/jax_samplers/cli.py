@@ -41,6 +41,7 @@ from .core.generic_problem import GenericProblem
 from .core.problem import Problem
 from .adapters.transdim_product_space import TransdimProductSpaceProblem
 from .registry import get_sampler
+from .samplers.blackjax_ns import NSConfig
 
 from .core.rj import RJGenericConfig
 from .core.utils import (
@@ -214,7 +215,13 @@ def _build_parser():
     p.add_argument("--num-delete-ratio", type=float, default=0.3)
     p.add_argument("--num-inner-steps", type=int, default=0, help="Slice steps per live point; 0 -> auto (3*dim)")
     p.add_argument("--tol", type=float, default=3.0)
+
     p.add_argument("--max-batch", type=int, default=0, help="(optional) chunk size for batched likelihood")
+    p.add_argument("--ggns-step-size", type=float, default=1e-3, help="GGNS integration step size")
+    p.add_argument("--ggns-num-inner-steps", type=int, default=1, help="GGNS inner steps")
+    p.add_argument("--initial-num-steps", type=int, default=0, help="Dynamic scheduler initial_num_steps (0 -> auto)")
+    p.add_argument("--refinement-num-steps", type=int, default=0, help="Dynamic scheduler refinement_num_steps (0 -> auto)")
+    p.add_argument("--max-batches", type=int, default=3, help="Dynamic scheduler max_batches")
     # Hamiltonian NS specific
     p.add_argument("--ham-dt-ini", type=float, default=0.3, help="Initial step size for Hamiltonian NS")
     p.add_argument("--ham-min-reflections", type=int, default=2, help="Min reflections for Hamiltonian NS")
@@ -333,31 +340,33 @@ def main():
         is_product_space_transdim = True
 
     # Auto inner steps for BlackJAX-NS
-    if args.algo in ("ns", "dynamic_nss", "ns_hamiltonian") and (args.num_inner_steps is None or args.num_inner_steps <= 0):
+    if args.algo in ("ns", "dynamic_nss", "ns_hamiltonian", "ggns", "dynamic_ggns") and (args.num_inner_steps is None or args.num_inner_steps <= 0):
         args.num_inner_steps = 3 * problem.dim
-
+        
     # ---------- Build sampler config ----------
     if args.algo == "ns":
-        from .samplers.blackjax_ns import NSConfig
         cfg = NSConfig(
             n_live=args.n_live,
             num_delete_ratio=args.num_delete_ratio,
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
+            initial_num_steps=(None if args.initial_num_steps <= 0 else args.initial_num_steps),
+            refinement_num_steps=(None if args.refinement_num_steps <= 0 else args.refinement_num_steps),
+            max_batches=max(0, int(args.max_batches)),
         )
 
     elif args.algo == "dynamic_nss":
-        from .samplers.blackjax_ns import NSConfig
         cfg = NSConfig(
             n_live=args.n_live,
             num_delete_ratio=args.num_delete_ratio,
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
+            initial_num_steps=(16 if args.initial_num_steps <= 0 else args.initial_num_steps),
+            refinement_num_steps=(8 if args.refinement_num_steps <= 0 else args.refinement_num_steps),
+            max_batches=max(1, int(args.max_batches)),
         )
 
     elif args.algo == "ns_hamiltonian":
-        from .samplers.blackjax_ns import NSConfig
-
         # Try to extract lower/upper from JSON config priors
         lower, upper = _extract_prior_bounds(cfg_json, problem)
 
@@ -379,6 +388,54 @@ def main():
             ham_max_steps=args.ham_max_steps,
             lower=lower,
             upper=upper,
+        )
+        
+    elif args.algo == "ggns":
+        cfg = NSConfig(
+            n_live=args.n_live,
+            num_delete_ratio=args.num_delete_ratio,
+            num_inner_steps=args.num_inner_steps,
+            tol=args.tol,
+            ggns_step_size=0.001 if args.ggns_step_size is None else args.ggns_step_size,
+            ggns_num_inner_steps=1 if args.ggns_num_inner_steps is None else args.ggns_num_inner_steps,
+        )
+
+    elif args.algo == "dynamic_ggns":
+        cfg = NSConfig(
+            n_live=args.n_live,
+            num_delete_ratio=args.num_delete_ratio,
+            num_inner_steps=args.num_inner_steps,
+            tol=args.tol,
+            ggns_step_size=0.001 if args.ggns_step_size is None else args.ggns_step_size,
+            ggns_num_inner_steps=1 if args.ggns_num_inner_steps is None else args.ggns_num_inner_steps,
+            initial_num_steps=args.initial_num_steps,
+            refinement_num_steps=args.refinement_num_steps,
+            max_batches=args.max_batches,
+        )
+
+    elif args.algo == "ggns":
+        from .samplers.blackjax_ns import NSConfig
+        cfg = NSConfig(
+            n_live=args.n_live,
+            num_delete_ratio=args.num_delete_ratio,
+            num_inner_steps=args.num_inner_steps,
+            tol=args.tol,
+            ggns_step_size=float(args.ggns_step_size),
+            ggns_num_inner_steps=int(args.ggns_num_inner_steps),
+        )
+
+    elif args.algo == "dynamic_ggns":
+        from .samplers.blackjax_ns import NSConfig
+        cfg = NSConfig(
+            n_live=args.n_live,
+            num_delete_ratio=args.num_delete_ratio,
+            num_inner_steps=args.num_inner_steps,
+            tol=args.tol,
+            ggns_step_size=float(args.ggns_step_size),
+            ggns_num_inner_steps=int(args.ggns_num_inner_steps),
+            initial_num_steps=(None if args.initial_num_steps <= 0 else args.initial_num_steps),
+            refinement_num_steps=(None if args.refinement_num_steps <= 0 else args.refinement_num_steps),
+            max_batches=max(0, int(args.max_batches)),
         )
 
     elif args.algo == "jaxns":
@@ -458,6 +515,10 @@ def main():
         sampler = SamplerCls(problem, cfg).init(jr.PRNGKey(args.seed))
 
     # ---------- Run ----------
+    if args.algo in ("ggns", "dynamic_ggns"):
+        print(f"[run] GGNS mode active: algo={args.algo}")
+    if args.algo in ("dynamic_nss", "dynamic_ggns"):
+        print(f"[run] Dynamic NS scheduler active: algo={args.algo}")
     res = sampler.run(jr.PRNGKey(args.seed + 1))
 
     # ---------- Extract samples ----------
