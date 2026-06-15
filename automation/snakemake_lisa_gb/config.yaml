@@ -74,3 +74,19 @@ benchmark:
       initial_num_steps: [16]
       refinement_num_steps: [8]
       max_batches: [8]
+
+# Optional Sangria/LDC Galactic Binary catalogue diagnostics. These rules are
+# opt-in targets and do not replace the manually maintained bands.csv used by
+# the inference workflow unless you explicitly copy or point downstream tooling
+# at the generated windows CSV.
+sangria:
+  h5_path: ""
+  inspection_json: "results/sangria/inspection.json"
+  windows_csv: "results/sangria/windows.csv"
+  f_min: 0.0001
+  f_max: 0.02
+  tobs: 31457280.0
+  core_width: 0.00001
+  guard_width: 0.000002
+  overlap: 0.0
+  snr_threshold: null
