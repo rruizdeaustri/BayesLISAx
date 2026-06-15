@@ -26,6 +26,17 @@ SCAN_KS = [str(k) for k in config["scan"]["kmax_values"]]
 SCAN_SEEDS = [str(s) for s in config["scan"]["seeds"]]
 FINAL_SEEDS = [str(s) for s in config["final"]["seeds"]]
 
+
+SANGRIA = config.get("sangria", {})
+SANGRIA_H5 = SANGRIA.get("h5_path", "")
+SANGRIA_INSPECTION_JSON = SANGRIA.get("inspection_json", f"{RESULTS}/sangria/inspection.json")
+SANGRIA_WINDOWS_CSV = SANGRIA.get("windows_csv", f"{RESULTS}/sangria/windows.csv")
+SANGRIA_SNR_ARG = (
+    f"--snr-threshold {SANGRIA['snr_threshold']}"
+    if SANGRIA.get("snr_threshold", None) is not None
+    else ""
+)
+
 BENCH = config.get("benchmark", {})
 BENCH_ENABLED = bool(BENCH.get("enabled", False))
 BENCH_PRESETS = BENCH.get("presets", {})
@@ -55,6 +66,49 @@ rule all:
     input:
         expand(f"{RESULTS}/final/{{band_id}}/done.txt", band_id=BAND_IDS)
 
+
+
+rule inspect_sangria:
+    output:
+        SANGRIA_INSPECTION_JSON
+    params:
+        h5=SANGRIA_H5
+    shell:
+        r"""
+        test -n "{params.h5}"
+        python scripts/inspect_sangria_hdf5.py \
+          {params.h5} \
+          --out-json {output}
+        """
+
+
+rule make_sangria_windows:
+    input:
+        SANGRIA_INSPECTION_JSON
+    output:
+        SANGRIA_WINDOWS_CSV
+    params:
+        h5=SANGRIA_H5,
+        f_min=lambda wc: SANGRIA["f_min"],
+        f_max=lambda wc: SANGRIA["f_max"],
+        tobs=lambda wc: SANGRIA["tobs"],
+        core_width=lambda wc: SANGRIA["core_width"],
+        guard_width=lambda wc: SANGRIA["guard_width"],
+        overlap=lambda wc: SANGRIA.get("overlap", 0.0),
+        snr_arg=SANGRIA_SNR_ARG
+    shell:
+        r"""
+        python scripts/make_sangria_windows.py \
+          {params.h5} \
+          --f-min {params.f_min} \
+          --f-max {params.f_max} \
+          --tobs {params.tobs} \
+          --core-width {params.core_width} \
+          --guard-width {params.guard_width} \
+          --overlap {params.overlap} \
+          {params.snr_arg} \
+          --out-csv {output}
+        """
 
 rule make_scan_config:
     output:

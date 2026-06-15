@@ -141,3 +141,43 @@ python -m pip install "snakemake>=7.32.4,<10"
 ```
 
 (The campaign currently targets Snakemake `>=7.32.4,<10` for broader environment compatibility.)
+
+## Sangria catalogue inspection and window planning
+
+This workflow also includes optional tools for planning a future full LISA Galactic Binary campaign from LDC/Sangria HDF5 catalogues. The segmentation idea is inspired by the Radler/GBMCMC practice of splitting the Galactic Binary foreground into frequency regions before running detailed inference. These rules are **diagnostic planning aids**: final per-window inference still uses the BayesLISAx nested-sampling workflow described above.
+
+The manually maintained `bands.csv` remains the source of truth for the existing campaign rules. Generated Sangria windows are written to a separate CSV by default and are not consumed by `rule all` unless you explicitly choose to use them in a later workflow step.
+
+### Inspect an HDF5 catalogue
+
+Configure the HDF5 file path in `config.yaml` under `sangria.h5_path`, then run:
+
+```bash
+snakemake --cores 1 inspect_sangria
+```
+
+The `inspect_sangria` rule scans the expected Sangria source catalogue paths when present:
+
+- `sky/dgb/cat`
+- `sky/igb/cat`
+- `sky/vgb/cat`
+
+It prints the top-level HDF5 groups/datasets, available catalogue paths, entry counts, catalogue columns, and the minimum/maximum `Frequency` and `Amplitude` values. It also writes the same information to `sangria.inspection_json` for reproducibility.
+
+### Generate frequency windows
+
+After setting `sangria.f_min`, `sangria.f_max`, `sangria.tobs`, `sangria.core_width`, `sangria.guard_width`, `sangria.overlap`, and optionally `sangria.snr_threshold`, run:
+
+```bash
+snakemake --cores 1 make_sangria_windows
+```
+
+Each generated row contains a **core window** and a padded **analysis window**:
+
+- The core window (`core_f_min`, `core_f_max`) is the nominal non-padded frequency segment used to tile the requested global frequency range.
+- The analysis window (`analysis_f_min`, `analysis_f_max`) expands the core by `guard_width` on both sides, clipped to the requested global range. This padding is intended to catch leakage or boundary effects near the edge of a core segment.
+- `overlap` controls overlap between adjacent core windows; it must be smaller than `core_width`.
+
+The generated CSV reports catalogue source counts in each padded analysis window, an optional bright-source count above `sangria.snr_threshold`, and approximate maximum/median SNR values.
+
+The approximate SNR calculation is intentionally simple and follows a sky-averaged monochromatic LISA planning estimate inspired by LDCio helper code. These counts and SNRs are only for diagnostics and window planning; they are not likelihood terms, priors, sampler settings, or production BayesLISAx evidence calculations.
