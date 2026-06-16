@@ -183,6 +183,17 @@ def read_xyz_any(f: h5py.File, base: str):
 
     raise ValueError(f"Could not read {base} as group or compound dataset.")
 
+def load_obs_xyz(h5path: str):
+    """Load the observed Sangria TDI stream from obs/tdi."""
+    with h5py.File(h5path, "r") as f:
+        if "obs/tdi" not in f:
+            raise ValueError("Missing obs/tdi in file.")
+        t, X, Y, Z = read_xyz_any(f, "obs/tdi")
+        if t is None:
+            raise ValueError("obs/tdi has no time array 't' (unexpected).")
+    return t, X, Y, Z
+
+
 def load_total_vgb_xyz(h5path: str):
     with h5py.File(h5path, "r") as f:
         if "sky/vgb/tdi" not in f:
@@ -1442,9 +1453,53 @@ def make(args=None):
             sys.exit()
 
         #band_signature("TEST", f_band, dA, dE, SA, SE, df_band, i1, i2, dt_dec, Tobs_dec)    
-        
+
+    elif data_mode in ("obs", "sangria_obs"):
+        t_obs, X_obs, Y_obs, Z_obs = load_obs_xyz(h5)
+
+        _, dt_dec, Tobs_dec, freqs_pos, f_band, dA, dE, df_full, i1, i2 = build_band_from_time_series(
+            t=t_obs, X=X_obs, Y=Y_obs, Z=Z_obs,
+            decim=decim,
+            f_min_user=f_min_user,
+            f_max_user=f_max_user,
+            half_bins=half_bins,
+            f0_refs=None,
+        )
+
+        f_min_cfg = float(i1 * df_full)
+        f_max_cfg = float(np.nextafter((i2 + 1) * df_full, np.inf))
+
+        n_f_bins = int(_pick(cfg, "model", "n_f_bins", default=max(256, len(f_band))))
+        n_f_bins = max(n_f_bins, int(len(f_band)))
+
+        gb_cfg = GBJAXConfig(
+            t_obs=float(Tobs_dec),
+            dt=float(dt_dec),
+            n_f_bins=int(n_f_bins),
+            tdi2=bool(_pick(cfg, "model", "use_tdi2", default=False)),
+            f_min=float(f_min_cfg),
+            f_max=float(f_max_cfg),
+        )
+        sim_sum, sim_per = build_simulators(gb_cfg)
+
+        SA, SE = psd_AE(f_band, preset=NoisePreset.MRDv1, gen=TDIGeneration.TDI1)
+        df_band = float(f_band[1] - f_band[0])
+
+        dd = 4.0 * df_band * (
+            np.vdot(dA, dA / (np.asarray(SA) + 1e-300)).real
+            + np.vdot(dE, dE / (np.asarray(SE) + 1e-300)).real
+        )
+        print(f"\n[{data_mode}] observed TDI band diagnostics")
+        print(" i1,i2 =", int(i1), int(i2))
+        print(" n_f_bins =", int(len(f_band)))
+        print(" f_first,last =", float(f_band[0]), float(f_band[-1]))
+        print(" dt =", float(dt_dec), " Tobs =", float(Tobs_dec), " df =", float(df_full))
+        print(" |dA|^2 sum =", float(np.sum(np.abs(dA) ** 2)))
+        print(" |dE|^2 sum =", float(np.sum(np.abs(dE) ** 2)))
+        print(" (d|d) =", float(dd))
+
     else:
-        raise NotImplementedError("Implement obs/vgb_total similarly (same as your standalone).")
+        raise NotImplementedError(f"Unsupported data_mode={data_mode!r}; expected synthetic_from_catalogue, obs, or sangria_obs.")
 
     # ---- merge prior box with defaults (physical-space bounds) ----
     default_box = {
