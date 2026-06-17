@@ -10,7 +10,7 @@
     "f_max": 0.001825
   },
   "model": {
-    "Kmax": 2,
+    "Kmax": 6,
     "use_gates": true,
     "order_f0": false,
     "marg_Aphi": true,
