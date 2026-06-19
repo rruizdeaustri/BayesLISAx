@@ -215,6 +215,12 @@ def _build_parser():
     p.add_argument("--num-delete-ratio", type=float, default=0.3)
     p.add_argument("--num-inner-steps", type=int, default=0, help="Slice steps per live point; 0 -> auto (3*dim)")
     p.add_argument("--tol", type=float, default=3.0)
+    p.add_argument(
+        "--replacement-strategy",
+        choices=["global", "default", "cluster_aware"],
+        default=None,
+        help="NSS live-point replacement strategy; default/global preserves the BlackJAX default.",
+    )
 
     p.add_argument("--max-batch", type=int, default=0, help="(optional) chunk size for batched likelihood")
     p.add_argument("--ggns-step-size", type=float, default=1e-3, help="GGNS integration step size")
@@ -295,6 +301,8 @@ def main():
 
     cfg_path = _get_cfg_path(args)
     cfg_json = _load_json_maybe(cfg_path)
+    sampler_json = cfg_json.get("sampler", {}) if isinstance(cfg_json.get("sampler", {}), dict) else {}
+    replacement_strategy = args.replacement_strategy or sampler_json.get("replacement_strategy", "global")
 
     # ---------- Build Problem ----------
     is_product_space_transdim = False  # (K stored in column 0)
@@ -350,6 +358,7 @@ def main():
             num_delete_ratio=args.num_delete_ratio,
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
+            replacement_strategy=replacement_strategy,
             initial_num_steps=(None if args.initial_num_steps <= 0 else args.initial_num_steps),
             refinement_num_steps=(None if args.refinement_num_steps <= 0 else args.refinement_num_steps),
             max_batches=max(0, int(args.max_batches)),
@@ -361,6 +370,7 @@ def main():
             num_delete_ratio=args.num_delete_ratio,
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
+            replacement_strategy=replacement_strategy,
             initial_num_steps=(16 if args.initial_num_steps <= 0 else args.initial_num_steps),
             refinement_num_steps=(8 if args.refinement_num_steps <= 0 else args.refinement_num_steps),
             max_batches=max(1, int(args.max_batches)),
