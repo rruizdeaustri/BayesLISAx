@@ -1,5 +1,6 @@
 # src/jax_samplers/samplers/blackjax_ns.py
 import sys
+import inspect
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -10,7 +11,10 @@ import jax.random as jr
 import jax.numpy as jnp
 
 import blackjax
-from blackjax.ns.utils import finalise
+try:
+    from blackjax.ns.utils import finalise
+except ModuleNotFoundError:
+    finalise = None
 
 import anesthetic
 
@@ -46,6 +50,85 @@ def _resolve_ns_ctor():
     if callable(as_top):
         return as_top
     raise AttributeError("Could not resolve NSS constructor from blackjax.nss or blackjax.ns.nss.as_top_level_api")
+
+
+def _normalise_replacement_strategy(strategy: str | None) -> str:
+    """Return the canonical NSS replacement strategy name."""
+    if strategy is None:
+        return "global"
+    value = str(strategy).strip().lower()
+    aliases = {
+        "": "global",
+        "default": "global",
+        "global": "global",
+        "cluster_aware": "cluster_aware",
+        "cluster-aware": "cluster_aware",
+    }
+    if value not in aliases:
+        raise ValueError(
+            "Unsupported NSS replacement_strategy={!r}; expected one of "
+            "'global', 'default', or 'cluster_aware'.".format(strategy)
+        )
+    return aliases[value]
+
+
+def _resolve_cluster_aware_update_fn():
+    """Resolve the experimental BlackJAX cluster-aware NSS replacement update."""
+    ns_mod = getattr(blackjax, "ns", None)
+    nss_mod = getattr(ns_mod, "nss", None)
+    update_fn = getattr(nss_mod, "cluster_aware_update_with_mcmc_take_last", None)
+    if not callable(update_fn):
+        raise AttributeError(
+            "replacement_strategy='cluster_aware' requires "
+            "blackjax.ns.nss.cluster_aware_update_with_mcmc_take_last, but the "
+            "installed BlackJAX does not expose it. Install your experimental "
+            "BlackJAX branch or use replacement_strategy='global'/'default'."
+        )
+    return update_fn
+
+
+def _nss_replacement_kwargs(ns_ctor, strategy: str | None) -> Dict[str, Any]:
+    """Build constructor kwargs for the requested NSS replacement strategy.
+
+    The default/global strategy deliberately returns no kwargs so existing
+    configurations keep the exact BlackJAX default behaviour.
+    """
+    canonical = _normalise_replacement_strategy(strategy)
+    if canonical == "global":
+        return {}
+
+    update_fn = _resolve_cluster_aware_update_fn()
+
+    try:
+        sig = inspect.signature(ns_ctor)
+    except (TypeError, ValueError):
+        sig = None
+
+    # Accept a few likely API spellings while keeping the selected function
+    # itself unambiguous.
+    candidate_names = (
+        "update_strategy",
+        "replacement_strategy",
+        "replacement_fn",
+        "update_fn",
+        "mcmc_update_fn",
+        "nss_update_fn",
+    )
+    if sig is not None:
+        params = sig.parameters
+        for name in candidate_names:
+            if name in params:
+                return {name: update_fn}
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            return {"update_strategy": update_fn}
+
+    raise TypeError(
+        "replacement_strategy='cluster_aware' resolved the experimental "
+        "BlackJAX update function, but the resolved NSS constructor does not "
+        "advertise a supported update-strategy keyword. Expected one of: "
+        + ", ".join(candidate_names)
+        + "."
+    )
 
 
 def _resolve_ggns_ctor():
@@ -171,6 +254,9 @@ class NSConfig:
     initial_num_steps: int = 16
     refinement_num_steps: int = 8
     max_batches: int = 3
+    # NSS replacement strategy: "global"/"default" keep BlackJAX defaults;
+    # "cluster_aware" opts into blackjax.ns.nss.cluster_aware_update_with_mcmc_take_last.
+    replacement_strategy: str = "global"
     # Bounds for Hamiltonian NS reflections (set from CLI or problem)
     lower: list | None = None   # list of floats, length = dim
     upper: list | None = None   # list of floats, length = dim
@@ -238,11 +324,13 @@ class BlackJAXNestedSampler:
     def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
         logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
 
-        self.algo = _resolve_ns_ctor()(
+        ns_ctor = _resolve_ns_ctor()
+        self.algo = ns_ctor(
             logprior_fn=logprior_fn,
             loglikelihood_fn=loglike_fn,
             num_delete=self.num_delete,
             num_inner_steps=self.num_inner,
+            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy),
         )
 
         self.state = self.algo.init(init_pts)
@@ -289,6 +377,8 @@ class BlackJAXNestedSampler:
     def run(self, key: PRNGKey | None = None) -> SamplerResult:
         if self.state is None or self.algo is None:
             raise RuntimeError("Sampler not initialized. Call init(...) first.")
+        if finalise is None:
+            raise AttributeError("blackjax.ns.utils.finalise is not available in the installed BlackJAX")
         if key is None:
             key = self.key
 
@@ -356,6 +446,7 @@ class BlackJAXNestedSampler:
             "num_delete": int(self.num_delete),
             "num_inner_steps": int(self.num_inner),
             "kernel": "ns",
+            "replacement_strategy": _normalise_replacement_strategy(self.cfg.replacement_strategy),
         }
         if has_logz:
             diags["logZ"] = float(self.state.logZ)
@@ -596,6 +687,7 @@ class BlackJAXNestedSampler:
             "n_live": int(self.cfg.n_live),
             "num_delete": int(self.num_delete),
             "num_inner_steps": int(self.num_inner),
+            "replacement_strategy": _normalise_replacement_strategy(self.cfg.replacement_strategy),
         }
         
         # Convert to posterior samples (equal-weight) if anesthetic works
@@ -785,11 +877,13 @@ class BlackJAXNestedSamplerTD:
             theta = jnp.asarray(theta).reshape((self.d,))
             return _scalar(self.problem.loglikelihood(theta))
 
-        self.algo = _resolve_ns_ctor()(
+        ns_ctor = _resolve_ns_ctor()
+        self.algo = ns_ctor(
             logprior_fn=logprior_1,
             loglikelihood_fn=loglike_1,
             num_delete=self.num_delete,
             num_inner_steps=self.num_inner,
+            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy),
         )
 
         self.key, sub = jr.split(self.key)
@@ -819,11 +913,13 @@ class BlackJAXNestedSamplerFD:
         self.d = self.problem.dim
         self.num_delete = int(self.cfg.num_delete_ratio * self.cfg.n_live)
         self.num_inner = self.cfg.num_inner_steps
-        self.algo = _resolve_ns_ctor()(
+        ns_ctor = _resolve_ns_ctor()
+        self.algo = ns_ctor(
             logprior_fn=self.problem.logprior,
             loglikelihood_fn=self.problem.loglikelihood,
             num_delete=self.num_delete,
-            num_inner_steps=self.num_inner
+            num_inner_steps=self.num_inner,
+            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy),
         )
         self.key, sub = jr.split(self.key)
         init_pts = self.problem.sample_prior(sub, self.cfg.n_live)
@@ -992,6 +1088,7 @@ class BlackJAXDynamicNSS(BlackJAXNestedSampler):
             "num_delete": int(self.num_delete),
             "num_inner_steps": int(self.num_inner),
             "kernel": "dynamic_nss",
+            "replacement_strategy": _normalise_replacement_strategy(self.cfg.replacement_strategy),
             "dynamic_scheduler": True,
             "dynamic_num_batches": int(len(getattr(dyn, "batches", ()))),
             "dynamic_logZ": float(out.logZ) if hasattr(out, "logZ") else None,
