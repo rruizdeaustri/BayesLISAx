@@ -181,7 +181,7 @@ def _build_parser():
     )
     p.add_argument("--save", type=str, default="")
     p.add_argument("--no-show", action="store_true")
-    p.add_argument("--skip-plots", action="store_true",
+    p.add_argument("--skip-plots", "--no-plot", dest="skip_plots", action="store_true",
                    help="Run inference and exit before generating any plots.")
     p.add_argument("--plain-labels", action="store_true")
     p.add_argument("--no-titles", action="store_true")
@@ -220,6 +220,11 @@ def _build_parser():
         choices=["global", "default", "cluster_aware"],
         default=None,
         help="NSS live-point replacement strategy; default/global preserves the BlackJAX default.",
+    )
+    p.add_argument(
+        "--cluster-aware-eager",
+        action="store_true",
+        help="Pass eager=True to the experimental BlackJAX cluster-aware NSS replacement.",
     )
 
     p.add_argument("--max-batch", type=int, default=0, help="(optional) chunk size for batched likelihood")
@@ -303,6 +308,9 @@ def main():
     cfg_json = _load_json_maybe(cfg_path)
     sampler_json = cfg_json.get("sampler", {}) if isinstance(cfg_json.get("sampler", {}), dict) else {}
     replacement_strategy = args.replacement_strategy or sampler_json.get("replacement_strategy", "global")
+    cluster_aware_eager = bool(args.cluster_aware_eager or sampler_json.get("cluster_aware_eager", False))
+    print(f"[NS] replacement_strategy = {replacement_strategy}")
+    print(f"[NS] cluster_aware_eager = {cluster_aware_eager}")
 
     # ---------- Build Problem ----------
     is_product_space_transdim = False  # (K stored in column 0)
@@ -359,6 +367,7 @@ def main():
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
             replacement_strategy=replacement_strategy,
+            cluster_aware_eager=cluster_aware_eager,
             initial_num_steps=(None if args.initial_num_steps <= 0 else args.initial_num_steps),
             refinement_num_steps=(None if args.refinement_num_steps <= 0 else args.refinement_num_steps),
             max_batches=max(0, int(args.max_batches)),
@@ -371,6 +380,7 @@ def main():
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
             replacement_strategy=replacement_strategy,
+            cluster_aware_eager=cluster_aware_eager,
             initial_num_steps=(16 if args.initial_num_steps <= 0 else args.initial_num_steps),
             refinement_num_steps=(8 if args.refinement_num_steps <= 0 else args.refinement_num_steps),
             max_batches=max(1, int(args.max_batches)),

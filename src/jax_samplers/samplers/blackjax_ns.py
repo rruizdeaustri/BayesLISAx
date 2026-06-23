@@ -1,6 +1,7 @@
 # src/jax_samplers/samplers/blackjax_ns.py
 import sys
 import inspect
+import functools
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -87,7 +88,7 @@ def _resolve_cluster_aware_update_fn():
     return update_fn
 
 
-def _nss_replacement_kwargs(ns_ctor, strategy: str | None) -> Dict[str, Any]:
+def _nss_replacement_kwargs(ns_ctor, strategy: str | None, cluster_aware_eager: bool = False) -> Dict[str, Any]:
     """Build constructor kwargs for the requested NSS replacement strategy.
 
     The default/global strategy deliberately returns no kwargs so existing
@@ -98,6 +99,8 @@ def _nss_replacement_kwargs(ns_ctor, strategy: str | None) -> Dict[str, Any]:
         return {}
 
     update_fn = _resolve_cluster_aware_update_fn()
+    if cluster_aware_eager:
+        update_fn = functools.partial(update_fn, eager=True)
 
     try:
         sig = inspect.signature(ns_ctor)
@@ -257,6 +260,7 @@ class NSConfig:
     # NSS replacement strategy: "global"/"default" keep BlackJAX defaults;
     # "cluster_aware" opts into blackjax.ns.nss.cluster_aware_update_with_mcmc_take_last.
     replacement_strategy: str = "global"
+    cluster_aware_eager: bool = False
     # Bounds for Hamiltonian NS reflections (set from CLI or problem)
     lower: list | None = None   # list of floats, length = dim
     upper: list | None = None   # list of floats, length = dim
@@ -330,7 +334,7 @@ class BlackJAXNestedSampler:
             loglikelihood_fn=loglike_fn,
             num_delete=self.num_delete,
             num_inner_steps=self.num_inner,
-            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy),
+            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy, self.cfg.cluster_aware_eager),
         )
 
         self.state = self.algo.init(init_pts)
@@ -883,7 +887,7 @@ class BlackJAXNestedSamplerTD:
             loglikelihood_fn=loglike_1,
             num_delete=self.num_delete,
             num_inner_steps=self.num_inner,
-            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy),
+            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy, self.cfg.cluster_aware_eager),
         )
 
         self.key, sub = jr.split(self.key)
@@ -919,7 +923,7 @@ class BlackJAXNestedSamplerFD:
             loglikelihood_fn=self.problem.loglikelihood,
             num_delete=self.num_delete,
             num_inner_steps=self.num_inner,
-            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy),
+            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy, self.cfg.cluster_aware_eager),
         )
         self.key, sub = jr.split(self.key)
         init_pts = self.problem.sample_prior(sub, self.cfg.n_live)
