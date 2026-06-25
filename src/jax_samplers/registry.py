@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Any, Callable, Dict, Type, Union, Optional
 import importlib
+import importlib.util
 
 Entry = Union[Type[Any], Callable[[], Type[Any]]]
 _registry: Dict[str, Entry] = {}
@@ -45,7 +46,8 @@ from .samplers import elliptical_slice
 from .samplers import pt_rw
 from .samplers import rj_mh
 from .samplers import rj_es
-from .samplers import numpyro_nuts
+if importlib.util.find_spec("numpyro") is not None:
+    from .samplers import numpyro_nuts
 
 # Lazy JAXNS: only imported if requested
 def _lazy_jaxns():

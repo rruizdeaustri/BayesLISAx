@@ -215,6 +215,13 @@ def _build_parser():
     p.add_argument("--num-inner-steps", type=int, default=0, help="Slice steps per live point; 0 -> auto (3*dim)")
     p.add_argument("--tol", type=float, default=3.0)
     p.add_argument("--max-batch", type=int, default=0, help="(optional) chunk size for batched likelihood")
+    p.add_argument("--replacement-strategy", choices=["global", "default", "cluster_aware"], default="global")
+    p.add_argument("--replacement-diagnostics", action="store_true", help="Use/enable BlackJAX NSS replacement diagnostics.")
+    p.add_argument("--cluster-aware-eager", action="store_true", help="Enable eager execution for cluster-aware NSS replacement.")
+    p.add_argument("--cluster-aware-auto-fallback", action="store_true", help="Allow cluster-aware NSS replacement to fall back automatically.")
+    p.add_argument("--cluster-aware-warmup-attempts", type=int, default=25)
+    p.add_argument("--cluster-aware-min-success-rate", type=float, default=0.5)
+    p.add_argument("--cluster-aware-max-runtime-ratio", type=float, default=2.0)
     # Hamiltonian NS specific
     p.add_argument("--ham-dt-ini", type=float, default=0.3, help="Initial step size for Hamiltonian NS")
     p.add_argument("--ham-min-reflections", type=int, default=2, help="Min reflections for Hamiltonian NS")
@@ -344,6 +351,13 @@ def main():
             num_delete_ratio=args.num_delete_ratio,
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
+            replacement_strategy=args.replacement_strategy,
+            replacement_diagnostics=args.replacement_diagnostics,
+            cluster_aware_eager=args.cluster_aware_eager,
+            cluster_aware_auto_fallback=args.cluster_aware_auto_fallback,
+            cluster_aware_warmup_attempts=args.cluster_aware_warmup_attempts,
+            cluster_aware_min_success_rate=args.cluster_aware_min_success_rate,
+            cluster_aware_max_runtime_ratio=args.cluster_aware_max_runtime_ratio,
         )
 
     elif args.algo == "dynamic_nss":

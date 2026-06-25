@@ -10,9 +10,17 @@ import jax.random as jr
 import jax.numpy as jnp
 
 import blackjax
-from blackjax.ns.utils import finalise
+import importlib.util
+if "blackjax.ns.utils" in sys.modules or hasattr(blackjax, "ns"):
+    from blackjax.ns.utils import finalise
+else:
+    def finalise(*_args, **_kwargs):
+        raise RuntimeError("BlackJAX nested-sampling utilities are unavailable in this environment.")
 
-import anesthetic
+if "anesthetic" in sys.modules or importlib.util.find_spec("anesthetic") is not None:
+    import anesthetic
+else:
+    anesthetic = None
 
 from ..core.types import PRNGKey
 from ..core.problem import Problem
@@ -51,6 +59,54 @@ class NSConfig:
     # Bounds for Hamiltonian NS reflections (set from CLI or problem)
     lower: list | None = None   # list of floats, length = dim
     upper: list | None = None   # list of floats, length = dim
+    replacement_strategy: str = "global"
+    replacement_diagnostics: bool = False
+    cluster_aware_eager: bool = False
+    cluster_aware_auto_fallback: bool = False
+    cluster_aware_warmup_attempts: int = 25
+    cluster_aware_min_success_rate: float = 0.5
+    cluster_aware_max_runtime_ratio: float = 2.0
+
+
+def _build_nss_kwargs(logprior_fn, loglikelihood_fn, num_delete, num_inner_steps, cfg: NSConfig) -> dict:
+    """Build BlackJAX NSS kwargs, including optional replacement diagnostics."""
+    kwargs = {
+        "logprior_fn": logprior_fn,
+        "loglikelihood_fn": loglikelihood_fn,
+        "num_delete": num_delete,
+        "num_inner_steps": num_inner_steps,
+    }
+
+    replacement_strategy = getattr(cfg, "replacement_strategy", "global")
+    if replacement_strategy in ("global", "default"):
+        if getattr(cfg, "replacement_diagnostics", False):
+            kwargs["update_fn"] = blackjax.ns.nss.diagnostic_update_with_mcmc_take_last
+    elif replacement_strategy == "cluster_aware":
+        kwargs["update_fn"] = blackjax.ns.nss.cluster_aware_update_with_mcmc_take_last
+        kwargs["eager"] = bool(getattr(cfg, "cluster_aware_eager", False))
+        kwargs["print_diagnostics"] = bool(getattr(cfg, "replacement_diagnostics", False))
+        kwargs["auto_fallback"] = bool(getattr(cfg, "cluster_aware_auto_fallback", False))
+        kwargs["warmup_attempts"] = int(getattr(cfg, "cluster_aware_warmup_attempts", 25))
+        kwargs["min_success_rate"] = float(getattr(cfg, "cluster_aware_min_success_rate", 0.5))
+        kwargs["max_runtime_ratio"] = float(getattr(cfg, "cluster_aware_max_runtime_ratio", 2.0))
+    else:
+        raise ValueError(
+            "replacement_strategy must be one of 'global', 'default', or 'cluster_aware'; "
+            f"got {replacement_strategy!r}"
+        )
+
+    return kwargs
+
+
+def _print_nss_startup_config(cfg: NSConfig) -> None:
+    print(f"[NS] replacement_strategy = {getattr(cfg, 'replacement_strategy', 'global')}")
+    print(f"[NS] replacement_diagnostics = {getattr(cfg, 'replacement_diagnostics', False)}")
+    print(f"[NS] cluster_aware_eager = {getattr(cfg, 'cluster_aware_eager', False)}")
+    print(f"[NS] cluster_aware_auto_fallback = {getattr(cfg, 'cluster_aware_auto_fallback', False)}")
+    print(f"[NS] cluster_aware_warmup_attempts = {getattr(cfg, 'cluster_aware_warmup_attempts', 25)}")
+    print(f"[NS] cluster_aware_min_success_rate = {getattr(cfg, 'cluster_aware_min_success_rate', 0.5)}")
+    print(f"[NS] cluster_aware_max_runtime_ratio = {getattr(cfg, 'cluster_aware_max_runtime_ratio', 2.0)}")
+
 
 class BlackJAXNestedSampler:
     def __init__(self, problem: Problem, cfg: NSConfig):
@@ -115,11 +171,15 @@ class BlackJAXNestedSampler:
     def init(self, key: PRNGKey, problem: Problem | None = None, **cfg):
         logprior_fn, loglike_fn, init_pts = self._setup_common(key, problem, cfg)
 
+        _print_nss_startup_config(self.cfg)
         self.algo = blackjax.nss(
-            logprior_fn=logprior_fn,
-            loglikelihood_fn=loglike_fn,
-            num_delete=self.num_delete,
-            num_inner_steps=self.num_inner,
+            **_build_nss_kwargs(
+                logprior_fn,
+                loglike_fn,
+                self.num_delete,
+                self.num_inner,
+                self.cfg,
+            )
         )
 
         self.state = self.algo.init(init_pts)
