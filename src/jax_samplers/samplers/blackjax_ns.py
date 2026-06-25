@@ -73,6 +73,21 @@ def _normalise_replacement_strategy(strategy: str | None) -> str:
     return aliases[value]
 
 
+def _resolve_diagnostic_update_fn():
+    """Resolve the BlackJAX diagnostic NSS replacement update."""
+    ns_mod = getattr(blackjax, "ns", None)
+    nss_mod = getattr(ns_mod, "nss", None)
+    update_fn = getattr(nss_mod, "diagnostic_update_with_mcmc_take_last", None)
+    if not callable(update_fn):
+        raise AttributeError(
+            "replacement_diagnostics=True requires "
+            "blackjax.ns.nss.diagnostic_update_with_mcmc_take_last, but the "
+            "installed BlackJAX does not expose it. Install your experimental "
+            "BlackJAX branch or disable replacement diagnostics."
+        )
+    return update_fn
+
+
 def _resolve_cluster_aware_update_fn():
     """Resolve the experimental BlackJAX cluster-aware NSS replacement update."""
     ns_mod = getattr(blackjax, "ns", None)
@@ -88,20 +103,8 @@ def _resolve_cluster_aware_update_fn():
     return update_fn
 
 
-def _nss_replacement_kwargs(ns_ctor, strategy: str | None, cluster_aware_eager: bool = False) -> Dict[str, Any]:
-    """Build constructor kwargs for the requested NSS replacement strategy.
-
-    The default/global strategy deliberately returns no kwargs so existing
-    configurations keep the exact BlackJAX default behaviour.
-    """
-    canonical = _normalise_replacement_strategy(strategy)
-    if canonical == "global":
-        return {}
-
-    update_fn = _resolve_cluster_aware_update_fn()
-    if cluster_aware_eager:
-        update_fn = functools.partial(update_fn, eager=True)
-
+def _nss_update_strategy_kwargs(ns_ctor, update_fn) -> Dict[str, Any]:
+    """Build NSS constructor kwargs for a resolved replacement update function."""
     try:
         sig = inspect.signature(ns_ctor)
     except (TypeError, ValueError):
@@ -126,12 +129,52 @@ def _nss_replacement_kwargs(ns_ctor, strategy: str | None, cluster_aware_eager: 
             return {"update_strategy": update_fn}
 
     raise TypeError(
-        "replacement_strategy='cluster_aware' resolved the experimental "
-        "BlackJAX update function, but the resolved NSS constructor does not "
-        "advertise a supported update-strategy keyword. Expected one of: "
+        "The requested BlackJAX NSS replacement update function was resolved, "
+        "but the resolved NSS constructor does not advertise a supported "
+        "update-strategy keyword. Expected one of: "
         + ", ".join(candidate_names)
         + "."
     )
+
+
+def _nss_replacement_kwargs(
+    ns_ctor,
+    strategy: str | None,
+    cluster_aware_eager: bool = False,
+    replacement_diagnostics: bool = False,
+    cluster_aware_auto_fallback: bool = False,
+    cluster_aware_warmup_attempts: int | None = None,
+    cluster_aware_min_success_rate: float | None = None,
+    cluster_aware_max_runtime_ratio: float | None = None,
+) -> Dict[str, Any]:
+    """Build constructor kwargs for the requested NSS replacement strategy.
+
+    The default/global strategy deliberately returns no kwargs unless diagnostic
+    replacement is requested, so existing configurations keep the exact
+    BlackJAX default behaviour.
+    """
+    canonical = _normalise_replacement_strategy(strategy)
+    if canonical == "global":
+        if not replacement_diagnostics:
+            return {}
+        return _nss_update_strategy_kwargs(ns_ctor, _resolve_diagnostic_update_fn())
+
+    update_fn = _resolve_cluster_aware_update_fn()
+    cluster_kwargs = {
+        "replacement_diagnostics": replacement_diagnostics,
+        "auto_fallback": cluster_aware_auto_fallback,
+    }
+    if cluster_aware_eager:
+        cluster_kwargs["eager"] = True
+    if cluster_aware_warmup_attempts is not None:
+        cluster_kwargs["warmup_attempts"] = cluster_aware_warmup_attempts
+    if cluster_aware_min_success_rate is not None:
+        cluster_kwargs["min_success_rate"] = cluster_aware_min_success_rate
+    if cluster_aware_max_runtime_ratio is not None:
+        cluster_kwargs["max_runtime_ratio"] = cluster_aware_max_runtime_ratio
+    update_fn = functools.partial(update_fn, **cluster_kwargs)
+
+    return _nss_update_strategy_kwargs(ns_ctor, update_fn)
 
 
 def _resolve_ggns_ctor():
@@ -261,6 +304,11 @@ class NSConfig:
     # "cluster_aware" opts into blackjax.ns.nss.cluster_aware_update_with_mcmc_take_last.
     replacement_strategy: str = "global"
     cluster_aware_eager: bool = False
+    replacement_diagnostics: bool = False
+    cluster_aware_auto_fallback: bool = False
+    cluster_aware_warmup_attempts: int | None = None
+    cluster_aware_min_success_rate: float | None = None
+    cluster_aware_max_runtime_ratio: float | None = None
     # Bounds for Hamiltonian NS reflections (set from CLI or problem)
     lower: list | None = None   # list of floats, length = dim
     upper: list | None = None   # list of floats, length = dim
@@ -334,7 +382,16 @@ class BlackJAXNestedSampler:
             loglikelihood_fn=loglike_fn,
             num_delete=self.num_delete,
             num_inner_steps=self.num_inner,
-            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy, self.cfg.cluster_aware_eager),
+            **_nss_replacement_kwargs(
+                ns_ctor,
+                self.cfg.replacement_strategy,
+                self.cfg.cluster_aware_eager,
+                self.cfg.replacement_diagnostics,
+                self.cfg.cluster_aware_auto_fallback,
+                self.cfg.cluster_aware_warmup_attempts,
+                self.cfg.cluster_aware_min_success_rate,
+                self.cfg.cluster_aware_max_runtime_ratio,
+            ),
         )
 
         self.state = self.algo.init(init_pts)
@@ -887,7 +944,16 @@ class BlackJAXNestedSamplerTD:
             loglikelihood_fn=loglike_1,
             num_delete=self.num_delete,
             num_inner_steps=self.num_inner,
-            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy, self.cfg.cluster_aware_eager),
+            **_nss_replacement_kwargs(
+                ns_ctor,
+                self.cfg.replacement_strategy,
+                self.cfg.cluster_aware_eager,
+                self.cfg.replacement_diagnostics,
+                self.cfg.cluster_aware_auto_fallback,
+                self.cfg.cluster_aware_warmup_attempts,
+                self.cfg.cluster_aware_min_success_rate,
+                self.cfg.cluster_aware_max_runtime_ratio,
+            ),
         )
 
         self.key, sub = jr.split(self.key)
@@ -923,7 +989,16 @@ class BlackJAXNestedSamplerFD:
             loglikelihood_fn=self.problem.loglikelihood,
             num_delete=self.num_delete,
             num_inner_steps=self.num_inner,
-            **_nss_replacement_kwargs(ns_ctor, self.cfg.replacement_strategy, self.cfg.cluster_aware_eager),
+            **_nss_replacement_kwargs(
+                ns_ctor,
+                self.cfg.replacement_strategy,
+                self.cfg.cluster_aware_eager,
+                self.cfg.replacement_diagnostics,
+                self.cfg.cluster_aware_auto_fallback,
+                self.cfg.cluster_aware_warmup_attempts,
+                self.cfg.cluster_aware_min_success_rate,
+                self.cfg.cluster_aware_max_runtime_ratio,
+            ),
         )
         self.key, sub = jr.split(self.key)
         init_pts = self.problem.sample_prior(sub, self.cfg.n_live)
