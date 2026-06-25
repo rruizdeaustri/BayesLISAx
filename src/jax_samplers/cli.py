@@ -222,9 +222,37 @@ def _build_parser():
         help="NSS live-point replacement strategy; default/global preserves the BlackJAX default.",
     )
     p.add_argument(
+        "--replacement-diagnostics",
+        action="store_true",
+        help="Use diagnostic BlackJAX NSS replacement updates and print replacement diagnostics.",
+    )
+    p.add_argument(
         "--cluster-aware-eager",
         action="store_true",
         help="Pass eager=True to the experimental BlackJAX cluster-aware NSS replacement.",
+    )
+    p.add_argument(
+        "--cluster-aware-auto-fallback",
+        action="store_true",
+        help="Allow cluster-aware NSS replacement to fall back globally when inefficient.",
+    )
+    p.add_argument(
+        "--cluster-aware-warmup-attempts",
+        type=int,
+        default=None,
+        help="Warmup attempts for BlackJAX cluster-aware replacement auto-fallback diagnostics.",
+    )
+    p.add_argument(
+        "--cluster-aware-min-success-rate",
+        type=float,
+        default=None,
+        help="Minimum cluster-aware replacement success rate before auto-fallback is activated.",
+    )
+    p.add_argument(
+        "--cluster-aware-max-runtime-ratio",
+        type=float,
+        default=None,
+        help="Maximum cluster-aware/global runtime ratio before auto-fallback is activated.",
     )
 
     p.add_argument("--max-batch", type=int, default=0, help="(optional) chunk size for batched likelihood")
@@ -308,9 +336,42 @@ def main():
     cfg_json = _load_json_maybe(cfg_path)
     sampler_json = cfg_json.get("sampler", {}) if isinstance(cfg_json.get("sampler", {}), dict) else {}
     replacement_strategy = args.replacement_strategy or sampler_json.get("replacement_strategy", "global")
+    replacement_diagnostics = bool(args.replacement_diagnostics or sampler_json.get("replacement_diagnostics", False))
     cluster_aware_eager = bool(args.cluster_aware_eager or sampler_json.get("cluster_aware_eager", False))
+    cluster_aware_auto_fallback = bool(
+        args.cluster_aware_auto_fallback or sampler_json.get("cluster_aware_auto_fallback", False)
+    )
+    cluster_aware_warmup_attempts = (
+        args.cluster_aware_warmup_attempts
+        if args.cluster_aware_warmup_attempts is not None
+        else sampler_json.get("cluster_aware_warmup_attempts", None)
+    )
+    cluster_aware_min_success_rate = (
+        args.cluster_aware_min_success_rate
+        if args.cluster_aware_min_success_rate is not None
+        else sampler_json.get("cluster_aware_min_success_rate", None)
+    )
+    cluster_aware_max_runtime_ratio = (
+        args.cluster_aware_max_runtime_ratio
+        if args.cluster_aware_max_runtime_ratio is not None
+        else sampler_json.get("cluster_aware_max_runtime_ratio", None)
+    )
+    ns_replacement_options = dict(
+        replacement_strategy=replacement_strategy,
+        replacement_diagnostics=replacement_diagnostics,
+        cluster_aware_eager=cluster_aware_eager,
+        cluster_aware_auto_fallback=cluster_aware_auto_fallback,
+        cluster_aware_warmup_attempts=cluster_aware_warmup_attempts,
+        cluster_aware_min_success_rate=cluster_aware_min_success_rate,
+        cluster_aware_max_runtime_ratio=cluster_aware_max_runtime_ratio,
+    )
     print(f"[NS] replacement_strategy = {replacement_strategy}")
+    print(f"[NS] replacement_diagnostics = {replacement_diagnostics}")
     print(f"[NS] cluster_aware_eager = {cluster_aware_eager}")
+    print(f"[NS] cluster_aware_auto_fallback = {cluster_aware_auto_fallback}")
+    print(f"[NS] cluster_aware_warmup_attempts = {cluster_aware_warmup_attempts}")
+    print(f"[NS] cluster_aware_min_success_rate = {cluster_aware_min_success_rate}")
+    print(f"[NS] cluster_aware_max_runtime_ratio = {cluster_aware_max_runtime_ratio}")
 
     # ---------- Build Problem ----------
     is_product_space_transdim = False  # (K stored in column 0)
@@ -366,8 +427,7 @@ def main():
             num_delete_ratio=args.num_delete_ratio,
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
-            replacement_strategy=replacement_strategy,
-            cluster_aware_eager=cluster_aware_eager,
+            **ns_replacement_options,
             initial_num_steps=(None if args.initial_num_steps <= 0 else args.initial_num_steps),
             refinement_num_steps=(None if args.refinement_num_steps <= 0 else args.refinement_num_steps),
             max_batches=max(0, int(args.max_batches)),
@@ -379,8 +439,7 @@ def main():
             num_delete_ratio=args.num_delete_ratio,
             num_inner_steps=args.num_inner_steps,
             tol=args.tol,
-            replacement_strategy=replacement_strategy,
-            cluster_aware_eager=cluster_aware_eager,
+            **ns_replacement_options,
             initial_num_steps=(16 if args.initial_num_steps <= 0 else args.initial_num_steps),
             refinement_num_steps=(8 if args.refinement_num_steps <= 0 else args.refinement_num_steps),
             max_batches=max(1, int(args.max_batches)),

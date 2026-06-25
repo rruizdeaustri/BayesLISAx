@@ -32,8 +32,13 @@ def test_cluster_aware_replacement_resolves_experimental_update(monkeypatch):
     )
     monkeypatch.setattr(blackjax_ns, "blackjax", fake_blackjax)
 
-    assert blackjax_ns._nss_replacement_kwargs(ctor, "cluster_aware") == {
-        "update_strategy": sentinel
+    kwargs = blackjax_ns._nss_replacement_kwargs(ctor, "cluster_aware")
+
+    update_strategy = kwargs["update_strategy"]
+    assert update_strategy.func is sentinel
+    assert update_strategy.keywords == {
+        "replacement_diagnostics": False,
+        "auto_fallback": False,
     }
 
 
@@ -57,7 +62,65 @@ def test_cluster_aware_eager_wraps_update_with_eager_true(monkeypatch):
 
     update_strategy = kwargs["update_strategy"]
     assert update_strategy.func is sentinel
-    assert update_strategy.keywords == {"eager": True}
+    assert update_strategy.keywords == {
+        "replacement_diagnostics": False,
+        "auto_fallback": False,
+        "eager": True,
+    }
+
+
+def test_global_diagnostics_resolves_diagnostic_update(monkeypatch):
+    def diagnostic(*args, **kwargs):
+        return None
+
+    def ctor(update_strategy=None, **kwargs):
+        return update_strategy
+
+    fake_blackjax = types.SimpleNamespace(
+        ns=types.SimpleNamespace(
+            nss=types.SimpleNamespace(diagnostic_update_with_mcmc_take_last=diagnostic)
+        )
+    )
+    monkeypatch.setattr(blackjax_ns, "blackjax", fake_blackjax)
+
+    assert blackjax_ns._nss_replacement_kwargs(
+        ctor, "global", replacement_diagnostics=True
+    ) == {"update_strategy": diagnostic}
+
+
+def test_cluster_aware_auto_fallback_options_are_forwarded(monkeypatch):
+    def sentinel(*args, **kwargs):
+        return None
+
+    def ctor(update_strategy=None, **kwargs):
+        return update_strategy
+
+    fake_blackjax = types.SimpleNamespace(
+        ns=types.SimpleNamespace(
+            nss=types.SimpleNamespace(cluster_aware_update_with_mcmc_take_last=sentinel)
+        )
+    )
+    monkeypatch.setattr(blackjax_ns, "blackjax", fake_blackjax)
+
+    kwargs = blackjax_ns._nss_replacement_kwargs(
+        ctor,
+        "cluster_aware",
+        replacement_diagnostics=True,
+        cluster_aware_auto_fallback=True,
+        cluster_aware_warmup_attempts=20,
+        cluster_aware_min_success_rate=0.2,
+        cluster_aware_max_runtime_ratio=2.0,
+    )
+
+    update_strategy = kwargs["update_strategy"]
+    assert update_strategy.func is sentinel
+    assert update_strategy.keywords == {
+        "replacement_diagnostics": True,
+        "auto_fallback": True,
+        "warmup_attempts": 20,
+        "min_success_rate": 0.2,
+        "max_runtime_ratio": 2.0,
+    }
 
 
 def test_cluster_aware_replacement_requires_blackjax_support(monkeypatch):
