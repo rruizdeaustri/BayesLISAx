@@ -32,7 +32,7 @@ def test_global_diagnostics_selects_diagnostic_update(monkeypatch):
 
     kwargs = module._build_nss_kwargs(lambda x: x, lambda x: x, 2, 7, cfg)
 
-    assert kwargs["update_fn"] is diagnostic
+    assert kwargs["update_strategy"] is diagnostic
 
 
 def test_default_diagnostics_selects_diagnostic_update(monkeypatch):
@@ -41,7 +41,7 @@ def test_default_diagnostics_selects_diagnostic_update(monkeypatch):
 
     kwargs = module._build_nss_kwargs(lambda x: x, lambda x: x, 2, 7, cfg)
 
-    assert kwargs["update_fn"] is diagnostic
+    assert kwargs["update_strategy"] is diagnostic
 
 
 def test_cluster_aware_maps_diagnostics_and_forwards_fallback_kwargs(monkeypatch):
@@ -58,7 +58,7 @@ def test_cluster_aware_maps_diagnostics_and_forwards_fallback_kwargs(monkeypatch
 
     kwargs = module._build_nss_kwargs(lambda x: x, lambda x: x, 2, 7, cfg)
 
-    assert kwargs["update_fn"] is cluster_aware
+    assert kwargs["update_strategy"] is cluster_aware
     assert kwargs["print_diagnostics"] is True
     assert "replacement_diagnostics" not in kwargs
     assert kwargs["eager"] is True

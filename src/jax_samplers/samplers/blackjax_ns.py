@@ -80,9 +80,9 @@ def _build_nss_kwargs(logprior_fn, loglikelihood_fn, num_delete, num_inner_steps
     replacement_strategy = getattr(cfg, "replacement_strategy", "global")
     if replacement_strategy in ("global", "default"):
         if getattr(cfg, "replacement_diagnostics", False):
-            kwargs["update_fn"] = blackjax.ns.nss.diagnostic_update_with_mcmc_take_last
+            kwargs["update_strategy"] = blackjax.ns.nss.diagnostic_update_with_mcmc_take_last
     elif replacement_strategy == "cluster_aware":
-        kwargs["update_fn"] = blackjax.ns.nss.cluster_aware_update_with_mcmc_take_last
+        kwargs["update_strategy"] = blackjax.ns.nss.cluster_aware_update_with_mcmc_take_last
         kwargs["eager"] = bool(getattr(cfg, "cluster_aware_eager", False))
         kwargs["print_diagnostics"] = bool(getattr(cfg, "replacement_diagnostics", False))
         kwargs["auto_fallback"] = bool(getattr(cfg, "cluster_aware_auto_fallback", False))
