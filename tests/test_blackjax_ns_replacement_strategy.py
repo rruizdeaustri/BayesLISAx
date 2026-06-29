@@ -7,7 +7,9 @@ def load_blackjax_ns_with_fake_nss(monkeypatch):
     import blackjax
 
     diagnostic = object()
-    cluster_aware = object()
+
+    def cluster_aware(*args, **kwargs):
+        return None
     fake_nss = types.SimpleNamespace(
         diagnostic_update_with_mcmc_take_last=diagnostic,
         cluster_aware_update_with_mcmc_take_last=cluster_aware,
@@ -58,11 +60,23 @@ def test_cluster_aware_maps_diagnostics_and_forwards_fallback_kwargs(monkeypatch
 
     kwargs = module._build_nss_kwargs(lambda x: x, lambda x: x, 2, 7, cfg)
 
-    assert kwargs["update_strategy"] is cluster_aware
-    assert kwargs["print_diagnostics"] is True
-    assert "replacement_diagnostics" not in kwargs
-    assert kwargs["eager"] is True
-    assert kwargs["auto_fallback"] is True
-    assert kwargs["warmup_attempts"] == 13
-    assert kwargs["min_success_rate"] == 0.75
-    assert kwargs["max_runtime_ratio"] == 3.5
+    strategy = kwargs["update_strategy"]
+
+    assert strategy.func is cluster_aware
+    assert strategy.keywords["print_diagnostics"] is True
+    assert strategy.keywords["eager"] is True
+    assert strategy.keywords["auto_fallback"] is True
+    assert strategy.keywords["warmup_attempts"] == 13
+    assert strategy.keywords["min_success_rate"] == 0.75
+    assert strategy.keywords["max_runtime_ratio"] == 3.5
+
+    for bad_key in (
+        "replacement_diagnostics",
+        "print_diagnostics",
+        "eager",
+        "auto_fallback",
+        "warmup_attempts",
+        "min_success_rate",
+        "max_runtime_ratio",
+    ):
+        assert bad_key not in kwargs

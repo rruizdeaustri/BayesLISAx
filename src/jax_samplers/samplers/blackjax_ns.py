@@ -1,6 +1,7 @@
 # src/jax_samplers/samplers/blackjax_ns.py
 import sys
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Dict
 
 import numpy as np
@@ -82,13 +83,15 @@ def _build_nss_kwargs(logprior_fn, loglikelihood_fn, num_delete, num_inner_steps
         if getattr(cfg, "replacement_diagnostics", False):
             kwargs["update_strategy"] = blackjax.ns.nss.diagnostic_update_with_mcmc_take_last
     elif replacement_strategy == "cluster_aware":
-        kwargs["update_strategy"] = blackjax.ns.nss.cluster_aware_update_with_mcmc_take_last
-        kwargs["eager"] = bool(getattr(cfg, "cluster_aware_eager", False))
-        kwargs["print_diagnostics"] = bool(getattr(cfg, "replacement_diagnostics", False))
-        kwargs["auto_fallback"] = bool(getattr(cfg, "cluster_aware_auto_fallback", False))
-        kwargs["warmup_attempts"] = int(getattr(cfg, "cluster_aware_warmup_attempts", 25))
-        kwargs["min_success_rate"] = float(getattr(cfg, "cluster_aware_min_success_rate", 0.5))
-        kwargs["max_runtime_ratio"] = float(getattr(cfg, "cluster_aware_max_runtime_ratio", 2.0))
+        kwargs["update_strategy"] = partial(
+            blackjax.ns.nss.cluster_aware_update_with_mcmc_take_last,
+            eager=bool(getattr(cfg, "cluster_aware_eager", False)),
+            print_diagnostics=bool(getattr(cfg, "replacement_diagnostics", False)),
+            auto_fallback=bool(getattr(cfg, "cluster_aware_auto_fallback", False)),
+            warmup_attempts=int(getattr(cfg, "cluster_aware_warmup_attempts", 25)),
+            min_success_rate=float(getattr(cfg, "cluster_aware_min_success_rate", 0.5)),
+            max_runtime_ratio=float(getattr(cfg, "cluster_aware_max_runtime_ratio", 2.0)),
+        )
     else:
         raise ValueError(
             "replacement_strategy must be one of 'global', 'default', or 'cluster_aware'; "
