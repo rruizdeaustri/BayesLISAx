@@ -1,0 +1,42 @@
+# Tiny local smoke-test configuration for the static nested-sampling workflow.
+# This is a workflow check only: values are intentionally cheap and are not
+# suitable for production evidence estimates.
+repo_root: .
+base_json: ../../examples/json/lisa_gb_transdim.json
+python: python
+problem_factory: jax_samplers.problems.lisa_gb_transdim_problem:make
+workflow_mode: production
+
+static_ns:
+  algo: ns
+  k_values: [1, 2]
+  seeds: [0]
+  n_live: 32
+  num_delete_ratio: 0.1
+  num_inner_steps: 4
+  tol: 20
+  skip_plots: true
+
+# Disabled so `rule all` exercises only the fixed-K scan, aggregation, and
+# catalogue summary target. Nearest recovered-source matching is skipped.
+highres:
+  enabled: false
+  seeds: [0]
+  n_live: 32
+  num_delete_ratio: 0.1
+  num_inner_steps: 4
+  tol: 20
+  skip_plots: true
+
+catalogue:
+  margin_hz: 5.0e-6
+  snr_thresholds: [0.5, 1, 2]
+  top_n: 5
+
+results_dir: results_dryrun
+logs_dir: logs_dryrun
+selection_delta_logz: 1.0
+
+sangria:
+  h5_path: ""
+  tobs: 31457280.0

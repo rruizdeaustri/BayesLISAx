@@ -80,8 +80,8 @@ p.add_argument("--n-live", type=int, required=True)
 p.add_argument("--tol", type=float, required=True)
 p.add_argument("--num-inner-steps", type=int, required=True)
 p.add_argument("--num-delete-ratio", type=float, default=0.3)
-p.add_argument("--ggns-step-size", type=float, required=True)
-p.add_argument("--ggns-num-inner-steps", type=int, required=True)
+p.add_argument("--ggns-step-size", type=float, default=None)
+p.add_argument("--ggns-num-inner-steps", type=int, default=None)
 p.add_argument("--initial-num-steps", type=int, required=True)
 p.add_argument("--refinement-num-steps", type=int, required=True)
 p.add_argument("--max-batches", type=int, required=True)
@@ -119,11 +119,11 @@ cmd = [
     str(a.refinement_num_steps),
     "--max-batches",
     str(a.max_batches),
-    "--ggns-step-size",
-    str(a.ggns_step_size),
-    "--ggns-num-inner-steps",
-    str(a.ggns_num_inner_steps),
 ]
+if a.ggns_step_size is not None:
+    cmd.extend(["--ggns-step-size", str(a.ggns_step_size)])
+if a.ggns_num_inner_steps is not None:
+    cmd.extend(["--ggns-num-inner-steps", str(a.ggns_num_inner_steps)])
 if a.skip_plots:
     cmd.append("--skip-plots")
 
