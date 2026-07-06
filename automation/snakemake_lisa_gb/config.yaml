@@ -2,7 +2,47 @@ repo_root: /r5/home/rruiz/projects/sbi/BayesLISAx
 base_json: /r5/home/rruiz/projects/sbi/BayesLISAx/examples/json/lisa_gb_transdim.json
 python: /r5/home/rruiz/software/miniconda3/envs/blackjax-ns/bin/python
 problem_factory: jax_samplers.problems.lisa_gb_transdim_problem:make
+workflow_mode: production
 
+static_ns:
+  algo: ns
+  k_values: [1, 2, 3, 4, 5]
+  seeds: [0, 11, 22]
+  n_live: 500
+  num_delete_ratio: 0.1
+  num_inner_steps: 64
+  tol: 2
+  skip_plots: true
+
+highres:
+  enabled: true
+  seeds: [0]
+  n_live: 1000
+  num_delete_ratio: 0.1
+  num_inner_steps: 96
+  tol: 1
+  skip_plots: true
+
+# Small workflow-only check. Set workflow_mode: dry_run or pass --config workflow_mode=dry_run. Use with a one-row bands.csv.
+# Previous command-line overrides can still be supplied manually if desired.
+# Example: --config static_ns.k_values='[1,2]' static_ns.seeds='[0]' static_ns.n_live=32 static_ns.num_inner_steps=4 highres.n_live=32 highres.num_inner_steps=4
+# and a one-row bands.csv.
+dry_run:
+  k_values: [1, 2]
+  seeds: [0]
+  n_live: 32
+  num_inner_steps: 4
+
+catalogue:
+  margin_hz: 5.0e-6
+  snr_thresholds: [0.5, 1, 2, 3, 4, 5, 7, 10]
+  top_n: 40
+
+results_dir: results
+logs_dir: logs
+selection_delta_logz: 1.0
+
+# Legacy two-phase keys retained for existing external overrides/scripts.
 scan:
   kmax_values: [1, 2, 3]
   n_live: 500
@@ -10,7 +50,6 @@ scan:
   num_inner_steps: 32
   seeds: [0]
   skip_plots: true
-
 final:
   n_live: 1000
   tol: 1.0
@@ -19,10 +58,6 @@ final:
   skip_plots: false
   no_show: true
   save_plot: "results/final/b_test/corner.png"
-
-results_dir: results
-logs_dir: logs
-selection_delta_logz: 1.0
 
 benchmark:
   enabled: false
@@ -53,7 +88,7 @@ benchmark:
       refinement_num_steps: [2]
       max_batches: [2]
     pilot:
-      algos: [ns, dynamic_nss]
+      algos: [ns]
       seeds: [0]
       n_live: [500]
       tol: [1.0]
@@ -75,10 +110,6 @@ benchmark:
       refinement_num_steps: [8]
       max_batches: [8]
 
-# Optional Sangria/LDC Galactic Binary catalogue diagnostics. These rules are
-# opt-in targets and do not replace the manually maintained bands.csv used by
-# the inference workflow unless you explicitly copy or point downstream tooling
-# at the generated windows CSV.
 sangria:
   h5_path: ""
   inspection_json: "results/sangria/inspection.json"

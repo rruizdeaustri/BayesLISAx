@@ -181,3 +181,83 @@ Each generated row contains a **core window** and a padded **analysis window**:
 The generated CSV reports catalogue source counts in each padded analysis window, an optional bright-source count above `sangria.snr_threshold`, and approximate maximum/median SNR values.
 
 The approximate SNR calculation is intentionally simple and follows a sky-averaged monochromatic LISA planning estimate inspired by LDCio helper code. These counts and SNRs are only for diagnostics and window planning; they are not likelihood terms, priors, sampler settings, or production BayesLISAx evidence calculations.
+
+## Static nested-sampling Sangria observed-data workflow
+
+The default `Snakefile` now automates the validated **static nested-sampling only** workflow for observed Sangria Galactic Binary windows. The production rules intentionally invoke only:
+
+```bash
+--algo ns
+```
+
+They do not include `dynamic_nss`, `ggns`, `dynamic_ggns`, or `ns_hamiltonian` in the production target.
+
+### Configuration
+
+Edit `config.yaml`:
+
+```yaml
+static_ns:
+  algo: ns
+  k_values: [1, 2, 3, 4, 5]
+  seeds: [0, 11, 22]
+  n_live: 500
+  num_delete_ratio: 0.1
+  num_inner_steps: 64
+  tol: 2
+
+highres:
+  enabled: true
+  seeds: [0]
+  n_live: 1000
+  num_delete_ratio: 0.1
+  num_inner_steps: 96
+  tol: 1
+
+catalogue:
+  margin_hz: 5.0e-6
+  snr_thresholds: [0.5, 1, 2, 3, 4, 5, 7, 10]
+  top_n: 40
+```
+
+Set `sangria.h5_path` to enable catalogue diagnostics. If it is empty, the inference tables still build and the catalogue CSVs are written with headers only.
+
+### Example dry run / smoke check
+
+Use a one-row `bands.csv`, then run a Snakemake dry run with a tiny scan:
+
+```bash
+snakemake -n --cores 1 --config workflow_mode=dry_run
+```
+
+Execute the same tiny workflow locally:
+
+```bash
+snakemake --cores 1 --jobs 1 --config workflow_mode=dry_run
+```
+
+### Full static-NS run
+
+```bash
+snakemake --cores 1 --jobs 100
+```
+
+or on a Slurm cluster:
+
+```bash
+snakemake --cores 1 --jobs 100 \
+  --cluster "sbatch --gres=gpu:1 --cpus-per-task=8 --mem=32G --time=08:00:00"
+```
+
+### Static workflow outputs
+
+The campaign writes structured JSON per run and aggregate CSV tables under `results/static_ns/`:
+
+- `all_runs.csv`: every `(window, K, seed)` static-NS scan with `logZ`, `logZ_err`, `best_logL`, `ESS`, recovered `f0` summaries, and runtime.
+- `per_window_k_summary.csv`: one row per `(window, K)` using the maximum `logZ` over seeds and `delta_logZ_from_previous_K` for neighbouring-K evidence scans.
+- `selected_k.csv`: selected `K_best` per window, defined as the `K` with the largest seed-maximized evidence.
+- `selected_highres_runs.csv`: high-resolution reruns of the selected `K_best` for configured `highres.seeds`.
+- `catalogue_summary.csv`: catalogue source counts in an enlarged frequency interval, thresholded approximate-SNR counts, and the top-N sources serialized as JSON.
+- `nearest_catalogue_matches.csv`: nearest catalogue source in frequency for recovered high-resolution `f0` values.
+
+This reproduces the manual centered-band decision logic by comparing seed-maximized evidence across fixed K values, while retaining per-seed rows so crowded-window multimodality is visible.
