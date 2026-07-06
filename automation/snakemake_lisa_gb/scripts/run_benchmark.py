@@ -79,6 +79,7 @@ p.add_argument("--seed", type=int, required=True)
 p.add_argument("--n-live", type=int, required=True)
 p.add_argument("--tol", type=float, required=True)
 p.add_argument("--num-inner-steps", type=int, required=True)
+p.add_argument("--num-delete-ratio", type=float, default=0.3)
 p.add_argument("--ggns-step-size", type=float, required=True)
 p.add_argument("--ggns-num-inner-steps", type=int, required=True)
 p.add_argument("--initial-num-steps", type=int, required=True)
@@ -108,6 +109,8 @@ cmd = [
     str(a.tol),
     "--num-inner-steps",
     str(a.num_inner_steps),
+    "--num-delete-ratio",
+    str(a.num_delete_ratio),
     "--seed",
     str(a.seed),
     "--initial-num-steps",
@@ -188,6 +191,7 @@ out = {
     "n_live": a.n_live,
     "tol": a.tol,
     "num_inner_steps": a.num_inner_steps,
+    "num_delete_ratio": a.num_delete_ratio,
     "runtime_seconds": runtime,
     "return_code": cp.returncode,
     "status": status,
