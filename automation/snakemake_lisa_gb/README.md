@@ -95,3 +95,23 @@ python -m pip install "snakemake>=7.32.4,<10"
 ```
 
 (The campaign currently targets Snakemake `>=7.32.4,<10` for broader environment compatibility.)
+
+## Static-NS production workflow notes
+
+This branch treats the Snakemake campaign as a static nested-sampling production
+workflow. Legacy helper scripts for benchmark execution and Sangria window/truth
+exports are retained for compatibility, but the default `rule all` now builds the
+static-NS aggregate tables.
+
+Prefer config-file overlays for dry-runs instead of fragile nested command-line
+overrides such as `--config static_ns.k_values=...`:
+
+```bash
+snakemake -n --cores 1 --configfile config.dryrun.yaml
+```
+
+When `static_ns.highres.enabled: false`, the workflow stops at scan aggregation
+and catalogue diagnostics are generated from scan-selected runs with nearest
+catalogue matching skipped. When it is `true`, high-resolution selected runs are
+aggregated separately and nearest-match diagnostics target those high-resolution
+outputs.

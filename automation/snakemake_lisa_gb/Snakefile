@@ -11,25 +11,35 @@ bands = []
 with open("bands.csv", "r", encoding="utf-8") as fh:
     reader = csv.DictReader(fh)
     for row in reader:
-        bands.append(
-            {
-                "band_id": row["band_id"],
-                "f_min": float(row["f_min"]),
-                "f_max": float(row["f_max"]),
-            }
-        )
+        bands.append({"band_id": row["band_id"], "f_min": float(row["f_min"]), "f_max": float(row["f_max"])})
 
 BAND_IDS = [b["band_id"] for b in bands]
 BAND_MAP = {b["band_id"]: b for b in bands}
 
-SCAN_KS = [str(k) for k in config["scan"]["kmax_values"]]
-SCAN_SEEDS = [str(s) for s in config["scan"]["seeds"]]
-FINAL_SEEDS = [str(s) for s in config["final"]["seeds"]]
+STATIC_NS = config.get("static_ns", {})
+HIGHRES = STATIC_NS.get("highres", config.get("highres", {}))
+HIGHRES_ENABLED = bool(HIGHRES.get("enabled", True))
+SCAN_KS = [str(k) for k in STATIC_NS.get("k_values", config.get("scan", {}).get("kmax_values", [1, 2, 3]))]
+SCAN_SEEDS = [str(s) for s in STATIC_NS.get("seeds", config.get("scan", {}).get("seeds", [0]))]
+FINAL_SEEDS = [str(s) for s in HIGHRES.get("seeds", config.get("final", {}).get("seeds", [0]))]
+
+ALL_TARGETS = [
+    f"{RESULTS}/static_ns/all_runs.csv",
+    f"{RESULTS}/static_ns/per_window_k_summary.csv",
+    f"{RESULTS}/static_ns/selected_k.csv",
+]
+if HIGHRES_ENABLED:
+    ALL_TARGETS.extend([
+        f"{RESULTS}/static_ns/selected_highres_runs.csv",
+        f"{RESULTS}/static_ns/nearest_catalogue_matches.csv",
+    ])
+else:
+    ALL_TARGETS.append(f"{RESULTS}/static_ns/catalogue_diagnostics_scan.csv")
 
 
 rule all:
     input:
-        expand(f"{RESULTS}/final/{{band_id}}/done.txt", band_id=BAND_IDS)
+        ALL_TARGETS
 
 
 rule make_scan_config:
@@ -49,128 +59,125 @@ rule make_scan_config:
           --kmax {wildcards.kmax}
         """
 
-rule run_scan_ns:
+rule run_static_scan:
     input:
         cfg=f"{RESULTS}/scan/{{band_id}}/k{{kmax}}/config.json"
     output:
-        log=f"{LOGS}/scan/{{band_id}}_k{{kmax}}_s{{seed}}.log"
+        log=f"{LOGS}/scan/{{band_id}}_k{{kmax}}_s{{seed}}.log",
+        summary=f"{RESULTS}/scan/{{band_id}}/k{{kmax}}/s{{seed}}/summary.json"
     params:
         repo=config["repo_root"],
         py=config["python"],
         problem_factory=config["problem_factory"],
-        n_live=config["scan"]["n_live"],
-        tol=config["scan"]["tol"],
-        nis=config["scan"]["num_inner_steps"],
-        skip_plots=("--skip-plots" if config["scan"].get("skip_plots", False) else "")
+        n_live=STATIC_NS.get("n_live", config.get("scan", {}).get("n_live", 500)),
+        tol=STATIC_NS.get("tol", config.get("scan", {}).get("tol", 1.0)),
+        nis=STATIC_NS.get("num_inner_steps", config.get("scan", {}).get("num_inner_steps", 32)),
+        skip_plots=("--skip-plots" if STATIC_NS.get("skip_plots", config.get("scan", {}).get("skip_plots", False)) else ""),
+        f_min=lambda wc: BAND_MAP[wc.band_id]["f_min"],
+        f_max=lambda wc: BAND_MAP[wc.band_id]["f_max"],
     shell:
         r"""
         set -euo pipefail
-        mkdir -p $(dirname {output.log})
+        mkdir -p $(dirname {output.log}) $(dirname {output.summary})
         export JAX_SAMPLERS_CONFIG=$(realpath {input.cfg})
         PYTHONPATH={params.repo}/src:$PYTHONPATH \
         {params.py} -m jax_samplers.cli \
-          --algo ns \
-          --problem factory \
-          --problem-factory {params.problem_factory} \
-          --n-live {params.n_live} \
-          --tol {params.tol} \
-          --num-inner-steps {params.nis} \
-          {params.skip_plots} \
-          --seed {wildcards.seed} \
-          > {output.log} 2>&1
+          --algo ns --problem factory --problem-factory {params.problem_factory} \
+          --n-live {params.n_live} --tol {params.tol} --num-inner-steps {params.nis} \
+          {params.skip_plots} --seed {wildcards.seed} > {output.log} 2>&1
+        python scripts/static_ns_tables.py write-summary \
+          --log {output.log} --out-json {output.summary} --band-id {wildcards.band_id} \
+          --kmax {wildcards.kmax} --seed {wildcards.seed} \
+          --f-min {params.f_min} --f-max {params.f_max} --stage scan
         """
 
-rule summarize_scan:
+use rule run_static_scan as run_scan_ns
+
+rule aggregate_static_ns:
     input:
-        lambda wc: [f"{LOGS}/scan/{wc.band_id}_k{k}_s{SCAN_SEEDS[0]}.log" for k in SCAN_KS]
+        expand(f"{RESULTS}/scan/{{band_id}}/k{{kmax}}/s{{seed}}/summary.json", band_id=BAND_IDS, kmax=SCAN_KS, seed=SCAN_SEEDS)
     output:
-        f"{RESULTS}/scan/{{band_id}}/summary.csv"
+        all_runs=f"{RESULTS}/static_ns/all_runs.csv",
+        per_window=f"{RESULTS}/static_ns/per_window_k_summary.csv",
+        selected=f"{RESULTS}/static_ns/selected_k.csv"
     params:
-        kmaxs=" ".join(SCAN_KS)
+        delta=STATIC_NS.get("selection_delta_logz", config.get("selection_delta_logz", 1.0))
     shell:
-        r"""
-        python scripts/summarize.py \
-          --logs {input} \
-          --kmaxs {params.kmaxs} \
-          --out-csv {output}
-        """
+        "python scripts/static_ns_tables.py aggregate-static --summaries {input} --all-runs {output.all_runs} --per-window {output.per_window} --selected-k {output.selected} --delta-logz {params.delta}"
 
-
-rule select_kmax:
+rule make_highres_config:
     input:
-        f"{RESULTS}/scan/{{band_id}}/summary.csv"
+        selected=f"{RESULTS}/static_ns/selected_k.csv"
     output:
-        f"{RESULTS}/scan/{{band_id}}/selection.json"
-    params:
-        delta=config.get("selection_delta_logz", 1.0)
-    shell:
-        r"""
-        python scripts/select_kmax.py \
-          --summary-csv {input} \
-          --out-json {output} \
-          --delta-logz {params.delta}
-        """
-
-
-rule make_final_config:
-    input:
-        sel=f"{RESULTS}/scan/{{band_id}}/selection.json"
-    output:
-        f"{RESULTS}/final/{{band_id}}/config.json"
+        f"{RESULTS}/highres/{{band_id}}/config.json"
     params:
         base_json=config["base_json"],
         f_min=lambda wc: BAND_MAP[wc.band_id]["f_min"],
         f_max=lambda wc: BAND_MAP[wc.band_id]["f_max"],
     run:
-        selection = json.loads(Path(input.sel).read_text(encoding="utf-8"))
-        kmax = int(selection["selected_kmax"])
-        shell(
-            "python scripts/make_band_config.py "
-            "--base-json {params.base_json} "
-            "--out-json {output} "
-            "--f-min {params.f_min} "
-            "--f-max {params.f_max} "
-            f"--kmax {kmax}"
-        )
+        import csv
+        selected = {r["band_id"]: r for r in csv.DictReader(open(input.selected, encoding="utf-8"))}
+        kmax = int(selected[wildcards.band_id]["selected_kmax"])
+        shell("python scripts/make_band_config.py --base-json {params.base_json} --out-json {output} --f-min {params.f_min} --f-max {params.f_max} --kmax " + str(kmax))
 
-rule run_final_ns:
+rule run_highres:
     input:
-        cfg=f"{RESULTS}/final/{{band_id}}/config.json"
+        cfg=f"{RESULTS}/highres/{{band_id}}/config.json"
     output:
-        log=f"{LOGS}/final/{{band_id}}_s{{seed}}.log"
+        log=f"{LOGS}/highres/{{band_id}}_s{{seed}}.log",
+        summary=f"{RESULTS}/highres/{{band_id}}/s{{seed}}/summary.json"
     params:
-        repo=config["repo_root"],
-        py=config["python"],
-        problem_factory=config["problem_factory"],
-        n_live=config["final"]["n_live"],
-        tol=config["final"]["tol"],
-        nis=config["final"]["num_inner_steps"],
-        skip_plots=("--skip-plots" if config["final"].get("skip_plots", False) else ""),
-        no_show=("--no-show" if config["final"].get("no_show", False) else ""),
-        save_arg=(f'--save {config["final"]["save_plot"]}' if config["final"].get("save_plot", "") else "")
+        repo=config["repo_root"], py=config["python"], problem_factory=config["problem_factory"],
+        n_live=HIGHRES.get("n_live", config.get("final", {}).get("n_live", 1000)),
+        tol=HIGHRES.get("tol", config.get("final", {}).get("tol", 1.0)),
+        nis=HIGHRES.get("num_inner_steps", config.get("final", {}).get("num_inner_steps", 64)),
+        skip_plots=("--skip-plots" if HIGHRES.get("skip_plots", config.get("final", {}).get("skip_plots", False)) else ""),
+        no_show=("--no-show" if HIGHRES.get("no_show", config.get("final", {}).get("no_show", False)) else ""),
+        f_min=lambda wc: BAND_MAP[wc.band_id]["f_min"],
+        f_max=lambda wc: BAND_MAP[wc.band_id]["f_max"],
     shell:
         r"""
         set -euo pipefail
-        mkdir -p $(dirname {output.log})
+        mkdir -p $(dirname {output.log}) $(dirname {output.summary})
         export JAX_SAMPLERS_CONFIG=$(realpath {input.cfg})
-        PYTHONPATH={params.repo}/src:$PYTHONPATH \
-        {params.py} -m jax_samplers.cli \
-          --algo ns \
-          --problem factory \
-          --problem-factory {params.problem_factory} \
-          --n-live {params.n_live} \
-          --tol {params.tol} \
-          --num-inner-steps {params.nis} \
-          {params.skip_plots} \
-          {params.no_show} \
-          {params.save_arg} \
-          --seed {wildcards.seed} \
-          > {output.log} 2>&1
+        PYTHONPATH={params.repo}/src:$PYTHONPATH {params.py} -m jax_samplers.cli \
+          --algo ns --problem factory --problem-factory {params.problem_factory} \
+          --n-live {params.n_live} --tol {params.tol} --num-inner-steps {params.nis} \
+          {params.skip_plots} {params.no_show} --seed {wildcards.seed} > {output.log} 2>&1
+        python scripts/static_ns_tables.py write-summary \
+          --log {output.log} --out-json {output.summary} --band-id {wildcards.band_id} \
+          --seed {wildcards.seed} --f-min {params.f_min} --f-max {params.f_max} --stage highres
         """
 
+rule aggregate_highres:
+    input:
+        selected=f"{RESULTS}/static_ns/selected_k.csv",
+        summaries=expand(f"{RESULTS}/highres/{{band_id}}/s{{seed}}/summary.json", band_id=BAND_IDS, seed=FINAL_SEEDS)
+    output:
+        f"{RESULTS}/static_ns/selected_highres_runs.csv"
+    shell:
+        "python scripts/static_ns_tables.py aggregate-highres --selected-k {input.selected} --summaries {input.summaries} --out-csv {output}"
+
+rule catalogue_diagnostics_highres:
+    input:
+        f"{RESULTS}/static_ns/selected_highres_runs.csv"
+    output:
+        f"{RESULTS}/static_ns/nearest_catalogue_matches.csv"
+    shell:
+        "python scripts/catalogue_window_diagnostics.py --runs-csv {input} --out-csv {output}"
+
+rule catalogue_diagnostics_scan:
+    input:
+        f"{RESULTS}/static_ns/selected_k.csv"
+    output:
+        f"{RESULTS}/static_ns/catalogue_diagnostics_scan.csv"
+    shell:
+        "python scripts/catalogue_window_diagnostics.py --runs-csv {input} --out-csv {output} --skip-nearest-matches"
+
+# Legacy completion marker retained for older invocations that target final/<band_id>/done.txt.
 rule mark_done:
     input:
-        lambda wc: [f"{LOGS}/final/{wc.band_id}_s{s}.log" for s in FINAL_SEEDS]
+        lambda wc: [f"{LOGS}/highres/{wc.band_id}_s{s}.log" for s in FINAL_SEEDS]
     output:
         f"{RESULTS}/final/{{band_id}}/done.txt"
     shell:

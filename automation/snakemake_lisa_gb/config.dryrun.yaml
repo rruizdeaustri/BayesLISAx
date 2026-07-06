@@ -1,0 +1,26 @@
+# Minimal static-NS dry-run overlay. Use this with --configfile rather than
+# nested --config static_ns.k_values=... command-line overrides.
+repo_root: /path/to/jax_samplers
+base_json: /path/to/jax_samplers/examples/json/lisa_gb_transdim.json
+problem_factory: jax_samplers.problems.lisa_gb_transdim_problem:make
+python: python
+results_dir: results
+logs_dir: logs
+selection_delta_logz: 1.0
+
+static_ns:
+  k_values: [1, 2]
+  seeds: [0, 1]
+  n_live: 64
+  tol: 1.0
+  num_inner_steps: 16
+  skip_plots: true
+  selection_delta_logz: 1.0
+  highres:
+    enabled: false
+    seeds: [0]
+    n_live: 128
+    tol: 1.0
+    num_inner_steps: 32
+    skip_plots: true
+    no_show: true
