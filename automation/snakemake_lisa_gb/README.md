@@ -37,16 +37,18 @@ PYTHON_BIN=python3.12 EXPECT_PYTHON=3.12 ./setup_local.sh /path/to/jax_samplers
 source .venv/bin/activate
 ```
 
-4. Dry-run:
+4. Dry-run the tiny local configuration:
 
 ```bash
-snakemake -n --cores 1
+cd automation/snakemake_lisa_gb
+snakemake -n --cores 1 --configfile config.dryrun.yaml
 ```
 
-5. Execute locally:
+5. Execute the tiny local configuration:
 
 ```bash
-snakemake --cores 1 --jobs 4
+cd automation/snakemake_lisa_gb
+snakemake --cores 1 --configfile config.dryrun.yaml
 ```
 
 6. Execute on Slurm cluster (example):
@@ -224,16 +226,18 @@ Set `sangria.h5_path` to enable catalogue diagnostics. If it is empty, the infer
 
 ### Example dry run / smoke check
 
-Use a one-row `bands.csv`, then run a Snakemake dry run with a tiny scan:
+Use a one-row `bands.csv`, then run a Snakemake dry run with the tiny config. The provided `config.dryrun.yaml` keeps `highres.enabled: false`, so `rule all` requires `catalogue_summary.csv` but intentionally skips `selected_highres_runs.csv` and `nearest_catalogue_matches.csv`:
 
 ```bash
-snakemake -n --cores 1 --config workflow_mode=dry_run
+cd automation/snakemake_lisa_gb
+snakemake -n --cores 1 --configfile config.dryrun.yaml
 ```
 
 Execute the same tiny workflow locally:
 
 ```bash
-snakemake --cores 1 --jobs 1 --config workflow_mode=dry_run
+cd automation/snakemake_lisa_gb
+snakemake --cores 1 --configfile config.dryrun.yaml
 ```
 
 ### Full static-NS run
@@ -254,10 +258,10 @@ snakemake --cores 1 --jobs 100 \
 The campaign writes structured JSON per run and aggregate CSV tables under `results/static_ns/`:
 
 - `all_runs.csv`: every `(window, K, seed)` static-NS scan with `logZ`, `logZ_err`, `best_logL`, `ESS`, recovered `f0` summaries, and runtime.
-- `per_window_k_summary.csv`: one row per `(window, K)` using the maximum `logZ` over seeds and `delta_logZ_from_previous_K` for neighbouring-K evidence scans.
+- `per_window_k_summary.csv`: one row per `(window, K)` with seed-spread diagnostics (`n_seeds`, `best_logZ`, `best_logZ_seed`, `mean_logZ`, `std_logZ`, `min_logZ`, `max_logZ`) and `delta_logZ_from_previous_K` for neighbouring-K evidence scans.
 - `selected_k.csv`: selected `K_best` per window, defined as the `K` with the largest seed-maximized evidence.
-- `selected_highres_runs.csv`: high-resolution reruns of the selected `K_best` for configured `highres.seeds`.
+- `selected_highres_runs.csv`: high-resolution reruns of the selected `K_best` for configured `highres.seeds`; written only when `highres.enabled: true`.
 - `catalogue_summary.csv`: catalogue source counts in an enlarged frequency interval, thresholded approximate-SNR counts, and the top-N sources serialized as JSON.
-- `nearest_catalogue_matches.csv`: nearest catalogue source in frequency for recovered high-resolution `f0` values.
+- `nearest_catalogue_matches.csv`: nearest catalogue source in frequency for recovered high-resolution `f0` values; written only when `highres.enabled: true`.
 
 This reproduces the manual centered-band decision logic by comparing seed-maximized evidence across fixed K values, while retaining per-seed rows so crowded-window multimodality is visible.
