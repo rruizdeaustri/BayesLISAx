@@ -25,13 +25,13 @@ p.add_argument('--margin-hz',type=float,required=True)
 p.add_argument('--snr-thresholds',nargs='+',type=float,required=True)
 p.add_argument('--top-n',type=int,default=40)
 p.add_argument('--out-summary',required=True)
-p.add_argument('--out-matches',required=True)
+p.add_argument('--out-matches',default='')
 a=p.parse_args()
 cat=concatenate_catalogues(read_catalogues(a.h5_path))
 f=cat['Frequency']; snr=lisa_gb_approx_snr(f,cat['Amplitude'],a.tobs,cat.get('EclipticLatitude'),cat.get('Inclination'))
 sel=read_selected(a.selected_csv)
 recovered={}
-if a.highres_csv and Path(a.highres_csv).exists():
+if a.out_matches and a.highres_csv and Path(a.highres_csv).exists():
     with open(a.highres_csv,newline='') as fh:
         for r in csv.DictReader(fh): recovered.setdefault(r['window_id'],[]).extend(parse_f0(r.get('all_best_f0') or r.get('best_f0','')))
 summary=[]; matches=[]
@@ -48,4 +48,5 @@ for w in sel:
 fields=['window_id','f_min','f_max','catalogue_f_min','catalogue_f_max','total_catalogue_sources']+[f'count_snr_gt_{th:g}' for th in a.snr_thresholds]+['top_sources_json']
 Path(a.out_summary).parent.mkdir(parents=True,exist_ok=True)
 with open(a.out_summary,'w',newline='') as f1: w=csv.DictWriter(f1,fields); w.writeheader(); w.writerows(summary)
-with open(a.out_matches,'w',newline='') as f2: w=csv.DictWriter(f2,['window_id','recovered_f0','catalogue_frequency','delta_f','approx_snr','source_type']); w.writeheader(); w.writerows(matches)
+if a.out_matches:
+    with open(a.out_matches,'w',newline='') as f2: w=csv.DictWriter(f2,['window_id','recovered_f0','catalogue_frequency','delta_f','approx_snr','source_type']); w.writeheader(); w.writerows(matches)

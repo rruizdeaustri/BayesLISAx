@@ -24,7 +24,7 @@ p.add_argument('--out-all',required=True)
 p.add_argument('--out-k-summary',required=True)
 p.add_argument('--out-selected',required=True)
 p.add_argument('--highres-inputs',nargs='*',default=[])
-p.add_argument('--out-highres',required=True)
+p.add_argument('--out-highres',default='')
 a=p.parse_args()
 rows=[]
 for path in a.inputs:
@@ -53,14 +53,24 @@ for wid in sorted({r['window_id'] for r in rows}):
     prev=None
     summaries=[]
     for k in sorted(byk):
-        br=max(byk[k], key=lambda r: flt(r['logZ']))
-        dz='' if prev is None else flt(br['logZ'])-prev
-        summaries.append({'window_id':wid,'f_min':br['f_min'],'f_max':br['f_max'],'K':k,'best_seed':br['seed'],'max_logZ':br['logZ'],'max_logZ_err':br['logZ_err'],'delta_logZ_from_previous_K':dz,'num_seeds':len(byk[k])})
-        prev=flt(br['logZ'])
+        krows=byk[k]
+        br=max(krows, key=lambda r: flt(r['logZ']))
+        logzs=[flt(r['logZ']) for r in krows if math.isfinite(flt(r['logZ']))]
+        mean_logz=sum(logzs)/len(logzs) if logzs else ''
+        std_logz=(sum((x-mean_logz)**2 for x in logzs)/(len(logzs)-1))**0.5 if len(logzs)>1 else (0.0 if len(logzs)==1 else '')
+        best_logz=flt(br['logZ'])
+        dz='' if prev is None else best_logz-prev
+        summaries.append({
+            'window_id':wid,'f_min':br['f_min'],'f_max':br['f_max'],'K':k,
+            'n_seeds':len(krows),'best_logZ':br['logZ'],'best_logZ_seed':br['seed'],
+            'mean_logZ':mean_logz,'std_logZ':std_logz,
+            'min_logZ':min(logzs) if logzs else '','max_logZ':max(logzs) if logzs else '',
+            'max_logZ_err':br['logZ_err'],'delta_logZ_from_previous_K':dz})
+        prev=best_logz
     ks.extend(summaries)
-    best=max(summaries, key=lambda r: flt(r['max_logZ']))
-    selected.append({'window_id':wid,'f_min':best['f_min'],'f_max':best['f_max'],'K_best':best['K'],'best_seed':best['best_seed'],'max_logZ':best['max_logZ'],'max_logZ_err':best['max_logZ_err']})
-for out,data,fields2 in [(a.out_k_summary,ks,['window_id','f_min','f_max','K','best_seed','max_logZ','max_logZ_err','delta_logZ_from_previous_K','num_seeds']),(a.out_selected,selected,['window_id','f_min','f_max','K_best','best_seed','max_logZ','max_logZ_err'])]:
+    best=max(summaries, key=lambda r: flt(r['best_logZ']))
+    selected.append({'window_id':wid,'f_min':best['f_min'],'f_max':best['f_max'],'K_best':best['K'],'best_seed':best['best_logZ_seed'],'max_logZ':best['best_logZ'],'max_logZ_err':best['max_logZ_err']})
+for out,data,fields2 in [(a.out_k_summary,ks,['window_id','f_min','f_max','K','n_seeds','best_logZ','best_logZ_seed','mean_logZ','std_logZ','min_logZ','max_logZ','max_logZ_err','delta_logZ_from_previous_K']),(a.out_selected,selected,['window_id','f_min','f_max','K_best','best_seed','max_logZ','max_logZ_err'])]:
     Path(out).parent.mkdir(parents=True,exist_ok=True)
     with open(out,'w',newline='') as f: w=csv.DictWriter(f,fields2); w.writeheader(); w.writerows(data)
 
@@ -69,5 +79,6 @@ for path in a.highres_inputs:
     r=json.loads(Path(path).read_text()); meta=r.get('metadata',{})
     hi.append({'window_id':val(meta,'window_id','band_id'),'f_min':val(meta,'f_min'),'f_max':val(meta,'f_max'),'K':val(meta,'K','kmax'),'seed':r.get('seed',''),'logZ':r.get('logZ',''),'logZ_err':r.get('logZ_std',''),'best_logL':r.get('best_logL',''),'ESS':r.get('ESS',''),'best_f0':dump(first(r.get('f0_best'))),'posterior_f0_mean':dump(first(r.get('f0_mean'))),'posterior_f0_std':dump(first(r.get('f0_std'))),'runtime_seconds':r.get('runtime_seconds',''),'status':r.get('status',''),'summary_json':path,'log_path':r.get('log_path','')})
 fields3=list(hi[0].keys()) if hi else ['window_id','f_min','f_max','K','seed','logZ','logZ_err','best_logL','ESS','best_f0','posterior_f0_mean','posterior_f0_std','runtime_seconds','status']
-Path(a.out_highres).parent.mkdir(parents=True,exist_ok=True)
-with open(a.out_highres,'w',newline='') as f: w=csv.DictWriter(f,fields3); w.writeheader(); w.writerows(hi)
+if a.out_highres:
+    Path(a.out_highres).parent.mkdir(parents=True,exist_ok=True)
+    with open(a.out_highres,'w',newline='') as f: w=csv.DictWriter(f,fields3); w.writeheader(); w.writerows(hi)

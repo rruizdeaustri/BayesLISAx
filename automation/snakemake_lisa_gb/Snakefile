@@ -7,6 +7,7 @@ with open("bands.csv", newline="", encoding="utf-8") as fh:
     bands=[{"band_id":r["band_id"],"f_min":float(r["f_min"]),"f_max":float(r["f_max"])} for r in csv.DictReader(fh)]
 BAND_IDS=[b["band_id"] for b in bands]; BAND_MAP={b["band_id"]:b for b in bands}
 STATIC=dict(config.get("static_ns", config.get("scan", {}))); HIGH=dict(config.get("highres", config.get("final", {}))); CAT=config.get("catalogue", {})
+HIGHRES_ENABLED=bool(HIGH.get("enabled", True))
 if config.get("workflow_mode", "production") == "dry_run":
     DRY=config.get("dry_run", {})
     STATIC.update({k: v for k, v in DRY.items() if k in {"k_values", "seeds", "n_live", "num_inner_steps", "tol", "num_delete_ratio"}})
@@ -14,7 +15,7 @@ if config.get("workflow_mode", "production") == "dry_run":
 K_VALUES=[str(k) for k in STATIC.get("k_values", STATIC.get("kmax_values", [1]))]
 SEEDS=[str(s) for s in STATIC.get("seeds", [0])]; HIGH_SEEDS=[str(s) for s in HIGH.get("seeds", [0])]
 ALG=STATIC.get("algo","ns")
-if ALG != "ns": raise ValueError("static_ns.algo must be 'ns'; dynamic_nss/ggns/ns_hamiltonian are intentionally excluded")
+if ALG != "ns": raise ValueError("static_ns.algo must be 'ns'")
 
 def scan_json(w,k,s): return f"{RESULTS}/static_ns/scan/{w}/k{k}/seed{s}/summary.json"
 def high_json(w,s): return f"{RESULTS}/static_ns/highres/{w}/seed{s}/summary.json"
@@ -27,14 +28,20 @@ def selected_k(w):
             if r["window_id"]==w: return r["K_best"]
     return K_VALUES[0]
 
-rule all:
-    input:
-        f"{RESULTS}/static_ns/all_runs.csv",
-        f"{RESULTS}/static_ns/per_window_k_summary.csv",
-        f"{RESULTS}/static_ns/selected_k.csv",
+ALL_INPUTS=[
+    f"{RESULTS}/static_ns/all_runs.csv",
+    f"{RESULTS}/static_ns/per_window_k_summary.csv",
+    f"{RESULTS}/static_ns/selected_k.csv",
+    f"{RESULTS}/static_ns/catalogue_summary.csv",
+]
+if HIGHRES_ENABLED:
+    ALL_INPUTS.extend([
         f"{RESULTS}/static_ns/selected_highres_runs.csv",
-        f"{RESULTS}/static_ns/catalogue_summary.csv",
-        f"{RESULTS}/static_ns/nearest_catalogue_matches.csv"
+        f"{RESULTS}/static_ns/nearest_catalogue_matches.csv",
+    ])
+
+rule all:
+    input: ALL_INPUTS
 
 rule make_scan_config:
     output: f"{RESULTS}/static_ns/configs/{{band_id}}/k{{k}}.json"
@@ -47,17 +54,18 @@ rule run_static_scan:
     params:
         repo=config["repo_root"], py=config["python"], pf=config["problem_factory"],
         n=STATIC.get("n_live",500), tol=STATIC.get("tol",2), nis=STATIC.get("num_inner_steps",64),
-        delr=STATIC.get("num_delete_ratio",0.1), skip=("--skip-plots" if STATIC.get("skip_plots", True) else "")
+        delr=STATIC.get("num_delete_ratio",0.1), skip=("--skip-plots" if STATIC.get("skip_plots", True) else ""),
+        f_min=lambda wc: BAND_MAP[wc.band_id]["f_min"], f_max=lambda wc: BAND_MAP[wc.band_id]["f_max"]
     shell:
         r"""
         python scripts/run_benchmark.py --python {params.py} --repo-root {params.repo} --problem-factory {params.pf} \
           --config-json {input.cfg} --algo ns --seed {wildcards.seed} --n-live {params.n} --tol {params.tol} \
-          --num-inner-steps {params.nis} --num-delete-ratio {params.delr} --ggns-step-size 0.001 --ggns-num-inner-steps 1 \
+          --num-inner-steps {params.nis} --num-delete-ratio {params.delr} \
           --initial-num-steps 16 --refinement-num-steps 8 --max-batches 8 {params.skip} --out-json {output.summary}
         python - <<'EOF'
 import json
 from pathlib import Path
-p=Path('{output.summary}'); d=json.loads(p.read_text()); d['metadata']={{'window_id':'{wildcards.band_id}','f_min':{BAND_MAP[wildcards.band_id]['f_min']},'f_max':{BAND_MAP[wildcards.band_id]['f_max']},'K':int('{wildcards.k}'),'num_delete_ratio':{params.delr},'phase':'scan'}}; p.write_text(json.dumps(d,indent=2))
+p=Path('{output.summary}'); d=json.loads(p.read_text()); d['metadata']={{'window_id':'{wildcards.band_id}','f_min':{params.f_min},'f_max':{params.f_max},'K':int('{wildcards.k}'),'num_delete_ratio':{params.delr},'phase':'scan'}}; p.write_text(json.dumps(d,indent=2))
 EOF
         """
 
@@ -65,7 +73,7 @@ rule aggregate_static_ns:
     input: expand(f"{RESULTS}/static_ns/scan/{{band_id}}/k{{k}}/seed{{seed}}/summary.json", band_id=BAND_IDS, k=K_VALUES, seed=SEEDS)
     output:
         all=f"{RESULTS}/static_ns/all_runs.csv", ksum=f"{RESULTS}/static_ns/per_window_k_summary.csv", selected=f"{RESULTS}/static_ns/selected_k.csv"
-    shell: "python scripts/static_ns_tables.py --inputs {input} --out-all {output.all} --out-k-summary {output.ksum} --out-selected {output.selected} --out-highres {RESULTS}/static_ns/selected_highres_runs.csv"
+    shell: "python scripts/static_ns_tables.py --inputs {input} --out-all {output.all} --out-k-summary {output.ksum} --out-selected {output.selected}"
 
 rule make_highres_config:
     input: f"{RESULTS}/static_ns/selected_k.csv"
@@ -76,15 +84,19 @@ rule make_highres_config:
 rule run_highres:
     input: cfg=f"{RESULTS}/static_ns/highres/{{band_id}}/config.json"
     output: summary=f"{RESULTS}/static_ns/highres/{{band_id}}/seed{{seed}}/summary.json"
-    params: repo=config["repo_root"], py=config["python"], pf=config["problem_factory"], n=HIGH.get("n_live",1000), tol=HIGH.get("tol",1), nis=HIGH.get("num_inner_steps",96), delr=HIGH.get("num_delete_ratio",0.1), skip=("--skip-plots" if HIGH.get("skip_plots", True) else "")
+    params:
+        repo=config["repo_root"], py=config["python"], pf=config["problem_factory"],
+        n=HIGH.get("n_live",1000), tol=HIGH.get("tol",1), nis=HIGH.get("num_inner_steps",96),
+        delr=HIGH.get("num_delete_ratio",0.1), skip=("--skip-plots" if HIGH.get("skip_plots", True) else ""),
+        f_min=lambda wc: BAND_MAP[wc.band_id]["f_min"], f_max=lambda wc: BAND_MAP[wc.band_id]["f_max"]
     shell:
         r"""
-        python scripts/run_benchmark.py --python {params.py} --repo-root {params.repo} --problem-factory {params.pf} --config-json {input.cfg} --algo ns --seed {wildcards.seed} --n-live {params.n} --tol {params.tol} --num-inner-steps {params.nis} --num-delete-ratio {params.delr} --ggns-step-size 0.001 --ggns-num-inner-steps 1 --initial-num-steps 16 --refinement-num-steps 8 --max-batches 8 {params.skip} --out-json {output.summary}
+        python scripts/run_benchmark.py --python {params.py} --repo-root {params.repo} --problem-factory {params.pf} --config-json {input.cfg} --algo ns --seed {wildcards.seed} --n-live {params.n} --tol {params.tol} --num-inner-steps {params.nis} --num-delete-ratio {params.delr} --initial-num-steps 16 --refinement-num-steps 8 --max-batches 8 {params.skip} --out-json {output.summary}
         python - <<'EOF'
 import csv,json
 from pathlib import Path
 k=next(r['K_best'] for r in csv.DictReader(open('{RESULTS}/static_ns/selected_k.csv')) if r['window_id']=='{wildcards.band_id}')
-p=Path('{output.summary}'); d=json.loads(p.read_text()); d['metadata']={{'window_id':'{wildcards.band_id}','f_min':{BAND_MAP[wildcards.band_id]['f_min']},'f_max':{BAND_MAP[wildcards.band_id]['f_max']},'K':int(k),'num_delete_ratio':{params.delr},'phase':'highres'}}; p.write_text(json.dumps(d,indent=2))
+p=Path('{output.summary}'); d=json.loads(p.read_text()); d['metadata']={{'window_id':'{wildcards.band_id}','f_min':{params.f_min},'f_max':{params.f_max},'K':int(k),'num_delete_ratio':{params.delr},'phase':'highres'}}; p.write_text(json.dumps(d,indent=2))
 EOF
         """
 
@@ -95,8 +107,45 @@ rule aggregate_highres:
     output: f"{RESULTS}/static_ns/selected_highres_runs.csv"
     shell: "python scripts/static_ns_tables.py --inputs {input.scan} --highres-inputs {input.high} --out-all {RESULTS}/static_ns/all_runs.csv --out-k-summary {RESULTS}/static_ns/per_window_k_summary.csv --out-selected {RESULTS}/static_ns/selected_k.csv --out-highres {output}"
 
+CATALOGUE_INPUTS = [f"{RESULTS}/static_ns/selected_k.csv"]
+if HIGHRES_ENABLED:
+    CATALOGUE_INPUTS.append(f"{RESULTS}/static_ns/selected_highres_runs.csv")
+
+MATCH_ARGS = (
+    f"--highres-csv {RESULTS}/static_ns/selected_highres_runs.csv"
+    if HIGHRES_ENABLED
+    else ""
+)
+
 rule catalogue_diagnostics:
-    input: selected=f"{RESULTS}/static_ns/selected_k.csv", high=f"{RESULTS}/static_ns/selected_highres_runs.csv"
-    output: summary=f"{RESULTS}/static_ns/catalogue_summary.csv", matches=f"{RESULTS}/static_ns/nearest_catalogue_matches.csv"
-    params: h5=config.get("sangria",{}).get("h5_path", ""), tobs=config.get("sangria",{}).get("tobs",31457280.0), margin=CAT.get("margin_hz",5e-6), th=" ".join(str(x) for x in CAT.get("snr_thresholds",[0.5,1,2,3,4,5,7,10])), top=CAT.get("top_n",40)
-    shell: "if test -n '{params.h5}'; then python scripts/catalogue_window_diagnostics.py --h5-path {params.h5} --selected-csv {input.selected} --highres-csv {input.high} --tobs {params.tobs} --margin-hz {params.margin} --snr-thresholds {params.th} --top-n {params.top} --out-summary {output.summary} --out-matches {output.matches}; else mkdir -p $(dirname {output.summary}); echo 'window_id,f_min,f_max,catalogue_f_min,catalogue_f_max,total_catalogue_sources,top_sources_json' > {output.summary}; echo 'window_id,recovered_f0,catalogue_frequency,delta_f,approx_snr,source_type' > {output.matches}; fi"
+    input:
+        CATALOGUE_INPUTS
+    output:
+        summary=f"{RESULTS}/static_ns/catalogue_summary.csv",
+        matches=f"{RESULTS}/static_ns/nearest_catalogue_matches.csv"
+    params:
+        h5=config.get("sangria", {}).get("h5_path", ""),
+        tobs=config.get("sangria", {}).get("tobs", 31457280.0),
+        margin=CAT.get("margin_hz", 5e-6),
+        th=" ".join(str(x) for x in CAT.get("snr_thresholds", [0.5, 1, 2, 3, 4, 5, 7, 10])),
+        top=CAT.get("top_n", 40),
+        match_args=MATCH_ARGS
+    shell:
+        r"""
+        if test -n "{params.h5}"; then
+          python scripts/catalogue_window_diagnostics.py \
+            --h5-path {params.h5} \
+            --selected-csv {input[0]} \
+            {params.match_args} \
+            --tobs {params.tobs} \
+            --margin-hz {params.margin} \
+            --snr-thresholds {params.th} \
+            --top-n {params.top} \
+            --out-summary {output.summary} \
+            --out-matches {output.matches}
+        else
+          mkdir -p $(dirname {output.summary})
+          echo 'window_id,f_min,f_max,catalogue_f_min,catalogue_f_max,total_catalogue_sources,top_sources_json' > {output.summary}
+          echo 'window_id,recovered_f0,catalogue_frequency,delta_f,approx_snr,source_type' > {output.matches}
+        fi
+        """
