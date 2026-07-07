@@ -107,18 +107,45 @@ rule aggregate_highres:
     output: f"{RESULTS}/static_ns/selected_highres_runs.csv"
     shell: "python scripts/static_ns_tables.py --inputs {input.scan} --highres-inputs {input.high} --out-all {RESULTS}/static_ns/all_runs.csv --out-k-summary {RESULTS}/static_ns/per_window_k_summary.csv --out-selected {RESULTS}/static_ns/selected_k.csv --out-highres {output}"
 
-CATALOGUE_INPUTS={"selected": f"{RESULTS}/static_ns/selected_k.csv"}
-CATALOGUE_OUTPUTS={"summary": f"{RESULTS}/static_ns/catalogue_summary.csv"}
+CATALOGUE_INPUTS = [f"{RESULTS}/static_ns/selected_k.csv"]
 if HIGHRES_ENABLED:
-    CATALOGUE_INPUTS["high"] = f"{RESULTS}/static_ns/selected_highres_runs.csv"
-    CATALOGUE_OUTPUTS["matches"] = f"{RESULTS}/static_ns/nearest_catalogue_matches.csv"
-MATCH_ARGS=(f"--highres-csv {RESULTS}/static_ns/selected_highres_runs.csv "
-            f"--out-matches {RESULTS}/static_ns/nearest_catalogue_matches.csv") if HIGHRES_ENABLED else ""
-MATCH_HEADER_CMD=(f"echo 'window_id,recovered_f0,catalogue_frequency,delta_f,approx_snr,source_type' "
-                  f"> {RESULTS}/static_ns/nearest_catalogue_matches.csv") if HIGHRES_ENABLED else ":"
+    CATALOGUE_INPUTS.append(f"{RESULTS}/static_ns/selected_highres_runs.csv")
+
+MATCH_ARGS = (
+    f"--highres-csv {RESULTS}/static_ns/selected_highres_runs.csv"
+    if HIGHRES_ENABLED
+    else ""
+)
 
 rule catalogue_diagnostics:
-    input: CATALOGUE_INPUTS
-    output: CATALOGUE_OUTPUTS
-    params: h5=config.get("sangria",{}).get("h5_path", ""), tobs=config.get("sangria",{}).get("tobs",31457280.0), margin=CAT.get("margin_hz",5e-6), th=" ".join(str(x) for x in CAT.get("snr_thresholds",[0.5,1,2,3,4,5,7,10])), top=CAT.get("top_n",40), match_args=MATCH_ARGS, match_header_cmd=MATCH_HEADER_CMD
-    shell: "if test -n '{params.h5}'; then python scripts/catalogue_window_diagnostics.py --h5-path {params.h5} --selected-csv {input.selected} {params.match_args} --tobs {params.tobs} --margin-hz {params.margin} --snr-thresholds {params.th} --top-n {params.top} --out-summary {output.summary}; else mkdir -p $(dirname {output.summary}); echo 'window_id,f_min,f_max,catalogue_f_min,catalogue_f_max,total_catalogue_sources,top_sources_json' > {output.summary}; {params.match_header_cmd}; fi"
+    input:
+        CATALOGUE_INPUTS
+    output:
+        summary=f"{RESULTS}/static_ns/catalogue_summary.csv",
+        matches=f"{RESULTS}/static_ns/nearest_catalogue_matches.csv"
+    params:
+        h5=config.get("sangria", {}).get("h5_path", ""),
+        tobs=config.get("sangria", {}).get("tobs", 31457280.0),
+        margin=CAT.get("margin_hz", 5e-6),
+        th=" ".join(str(x) for x in CAT.get("snr_thresholds", [0.5, 1, 2, 3, 4, 5, 7, 10])),
+        top=CAT.get("top_n", 40),
+        match_args=MATCH_ARGS
+    shell:
+        r"""
+        if test -n "{params.h5}"; then
+          python scripts/catalogue_window_diagnostics.py \
+            --h5-path {params.h5} \
+            --selected-csv {input[0]} \
+            {params.match_args} \
+            --tobs {params.tobs} \
+            --margin-hz {params.margin} \
+            --snr-thresholds {params.th} \
+            --top-n {params.top} \
+            --out-summary {output.summary} \
+            --out-matches {output.matches}
+        else
+          mkdir -p $(dirname {output.summary})
+          echo 'window_id,f_min,f_max,catalogue_f_min,catalogue_f_max,total_catalogue_sources,top_sources_json' > {output.summary}
+          echo 'window_id,recovered_f0,catalogue_frequency,delta_f,approx_snr,source_type' > {output.matches}
+        fi
+        """

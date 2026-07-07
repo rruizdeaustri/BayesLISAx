@@ -1,7 +1,7 @@
 # Tiny local smoke-test configuration for the static nested-sampling workflow.
 # This is a workflow check only: values are intentionally cheap and are not
 # suitable for production evidence estimates.
-repo_root: .
+repo_root: ../..
 base_json: ../../examples/json/lisa_gb_transdim.json
 python: python
 problem_factory: jax_samplers.problems.lisa_gb_transdim_problem:make
