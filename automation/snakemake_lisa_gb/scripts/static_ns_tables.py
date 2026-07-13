@@ -76,9 +76,61 @@ for out,data,fields2 in [(a.out_k_summary,ks,['window_id','f_min','f_max','K','n
 
 hi=[]
 for path in a.highres_inputs:
-    r=json.loads(Path(path).read_text()); meta=r.get('metadata',{})
-    hi.append({'window_id':val(meta,'window_id','band_id'),'f_min':val(meta,'f_min'),'f_max':val(meta,'f_max'),'K':val(meta,'K','kmax'),'seed':r.get('seed',''),'logZ':r.get('logZ',''),'logZ_err':r.get('logZ_std',''),'best_logL':r.get('best_logL',''),'ESS':r.get('ESS',''),'best_f0':dump(first(r.get('f0_best'))),'posterior_f0_mean':dump(first(r.get('f0_mean'))),'posterior_f0_std':dump(first(r.get('f0_std'))),'runtime_seconds':r.get('runtime_seconds',''),'status':r.get('status',''),'summary_json':path,'log_path':r.get('log_path','')})
-fields3=list(hi[0].keys()) if hi else ['window_id','f_min','f_max','K','seed','logZ','logZ_err','best_logL','ESS','best_f0','posterior_f0_mean','posterior_f0_std','runtime_seconds','status']
+    r = json.loads(Path(path).read_text())
+    meta = r.get("metadata", {})
+
+    hi.append({
+        "window_id": val(meta, "window_id", "band_id"),
+        "f_min": val(meta, "f_min"),
+        "f_max": val(meta, "f_max"),
+        "K": val(meta, "K", "kmax"),
+        "seed": r.get("seed", ""),
+        "logZ": r.get("logZ", ""),
+        "logZ_err": r.get("logZ_std", ""),
+        "best_logL": r.get("best_logL", ""),
+        "ESS": r.get("ESS", ""),
+
+        # First component, kept for backward compatibility
+        "best_f0": dump(first(r.get("f0_best"))),
+        "posterior_f0_mean": dump(first(r.get("f0_mean"))),
+        "posterior_f0_std": dump(first(r.get("f0_std"))),
+
+        # Full K-component lists
+        "all_best_f0": dump(r.get("f0_best")),
+        "all_posterior_f0_mean": dump(r.get("f0_mean")),
+        "all_posterior_f0_std": dump(r.get("f0_std")),
+
+        "runtime_seconds": r.get("runtime_seconds", ""),
+        "status": r.get("status", ""),
+        "summary_json": path,
+        "log_path": r.get("log_path", ""),
+    })
+
+fields3 = list(hi[0].keys()) if hi else [
+    "window_id",
+    "f_min",
+    "f_max",
+    "K",
+    "seed",
+    "logZ",
+    "logZ_err",
+    "best_logL",
+    "ESS",
+    "best_f0",
+    "posterior_f0_mean",
+    "posterior_f0_std",
+    "all_best_f0",
+    "all_posterior_f0_mean",
+    "all_posterior_f0_std",
+    "runtime_seconds",
+    "status",
+    "summary_json",
+    "log_path",
+]
+
 if a.out_highres:
-    Path(a.out_highres).parent.mkdir(parents=True,exist_ok=True)
-    with open(a.out_highres,'w',newline='') as f: w=csv.DictWriter(f,fields3); w.writeheader(); w.writerows(hi)
+    Path(a.out_highres).parent.mkdir(parents=True, exist_ok=True)
+    with open(a.out_highres, "w", newline="") as f:
+        w = csv.DictWriter(f, fields3)
+        w.writeheader()
+        w.writerows(hi)

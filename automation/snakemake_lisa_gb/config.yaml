@@ -1,5 +1,6 @@
 repo_root: /r5/home/rruiz/projects/sbi/BayesLISAx
-base_json: /r5/home/rruiz/projects/sbi/BayesLISAx/examples/json/lisa_gb_transdim.json
+#base_json: /r5/home/rruiz/projects/sbi/BayesLISAx/examples/json/lisa_gb_transdim.json
+base_json: /r5/home/rruiz/projects/sbi/BayesLISAx/examples/json/lisa_gb_sangria_obs.json
 python: /r5/home/rruiz/software/miniconda3/envs/blackjax-ns/bin/python
 problem_factory: jax_samplers.problems.lisa_gb_transdim_problem:make
 workflow_mode: production
@@ -16,7 +17,7 @@ static_ns:
 
 highres:
   enabled: true
-  seeds: [0]
+  seeds: [0, 11, 22]
   n_live: 1000
   num_delete_ratio: 0.1
   num_inner_steps: 96
@@ -111,7 +112,7 @@ benchmark:
       max_batches: [8]
 
 sangria:
-  h5_path: ""
+  h5_path: "/r5/home/rruiz/projects/sbi/lisa/data/LDC2_sangria_training_v2.h5"
   inspection_json: "results/sangria/inspection.json"
   windows_csv: "results/sangria/windows.csv"
   f_min: 0.0001
