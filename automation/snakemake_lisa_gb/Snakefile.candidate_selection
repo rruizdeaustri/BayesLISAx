@@ -1,0 +1,64 @@
+# Optional candidate-selection extension for the main static-NS workflow.
+#
+# Run with:
+#   snakemake -s Snakefile.candidate_selection --cores 1 \
+#     candidate_selection_all
+
+include: "Snakefile"
+
+CANDIDATE_SELECTION = dict(config.get("candidate_selection", {}))
+
+
+rule candidate_selection_all:
+    input:
+        expand(
+            f"{RESULTS}/static_ns/consensus/"
+            f"{{band_id}}/candidate_selection_summary.json",
+            band_id=BAND_IDS,
+        )
+
+
+rule consensus_candidate_selection:
+    input:
+        clusters=(
+            f"{RESULTS}/static_ns/consensus/"
+            f"{{band_id}}/clusters.csv"
+        )
+    output:
+        candidates=(
+            f"{RESULTS}/static_ns/consensus/"
+            f"{{band_id}}/candidates.csv"
+        ),
+        summary=(
+            f"{RESULTS}/static_ns/consensus/"
+            f"{{band_id}}/candidate_selection_summary.json"
+        ),
+    params:
+        py=config["python"],
+        h5=config.get("sangria", {}).get("h5_path", ""),
+        tobs=config.get("sangria", {}).get(
+            "tobs",
+            31457280.0,
+        ),
+        bfdr_q=CANDIDATE_SELECTION.get("bfdr_q", 0.1),
+        probability_field=CANDIDATE_SELECTION.get(
+            "probability_field",
+            "mean_inclusion",
+        ),
+        max_match_bins=CANDIDATE_SELECTION.get(
+            "max_match_bins",
+            5.0,
+        ),
+    shell:
+        r"""
+        {params.py} scripts/consensus_candidate_selection.py \
+          --clusters-csv {input.clusters} \
+          --window-id {wildcards.band_id} \
+          --tobs {params.tobs} \
+          --h5-path "{params.h5}" \
+          --bfdr-q {params.bfdr_q} \
+          --probability-field {params.probability_field} \
+          --max-match-bins {params.max_match_bins} \
+          --out-candidates {output.candidates} \
+          --out-summary {output.summary}
+        """
