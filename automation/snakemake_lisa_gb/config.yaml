@@ -24,6 +24,13 @@ highres:
   tol: 1
   skip_plots: true
 
+consensus:
+  enabled: true
+  dim_per: 7
+  f0_index: 0
+  p_index: 6
+  p_active_min: 0.5
+
 # Small workflow-only check. Set workflow_mode: dry_run or pass --config workflow_mode=dry_run. Use with a one-row bands.csv.
 # Previous command-line overrides can still be supplied manually if desired.
 # Example: --config static_ns.k_values='[1,2]' static_ns.seeds='[0]' static_ns.n_live=32 static_ns.num_inner_steps=4 highres.n_live=32 highres.num_inner_steps=4
