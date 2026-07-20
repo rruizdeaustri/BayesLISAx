@@ -1,0 +1,103 @@
+# Optional conditional-likelihood validation extension.
+#
+# Run with:
+#   snakemake -s Snakefile.conditional_likelihood --cores 1 \
+#     conditional_likelihood_all
+
+include: "Snakefile.candidate_selection"
+
+CONDITIONAL = dict(config.get("conditional_likelihood", {}))
+
+
+def conditional_prefilter_args():
+    args = []
+    if CONDITIONAL.get("minimum_mean_inclusion") is not None:
+        args.extend(["--minimum-mean-inclusion", str(CONDITIONAL["minimum_mean_inclusion"])])
+    if CONDITIONAL.get("minimum_seed_support") is not None:
+        args.extend(["--minimum-seed-support", str(CONDITIONAL["minimum_seed_support"])])
+    allowed = CONDITIONAL.get("allowed_sampling_quality", [])
+    if allowed:
+        args.append("--allowed-sampling-quality")
+        args.extend(str(value) for value in allowed)
+    return " ".join(args)
+
+
+rule conditional_likelihood_all:
+    input:
+        expand(
+            f"{RESULTS}/static_ns/conditional/"
+            f"{{band_id}}/summary.json",
+            band_id=BAND_IDS,
+        )
+
+
+rule conditional_likelihood_selection:
+    input:
+        candidates=(
+            f"{RESULTS}/static_ns/consensus/"
+            f"{{band_id}}/candidates.csv"
+        ),
+        posteriors=lambda wc: [
+            high_posterior(wc.band_id, seed)
+            for seed in HIGH_SEEDS
+        ],
+        config=(
+            f"{RESULTS}/static_ns/highres/"
+            f"{{band_id}}/config.json"
+        ),
+    output:
+        significance=(
+            f"{RESULTS}/static_ns/conditional/"
+            f"{{band_id}}/candidate_significance.csv"
+        ),
+        final_catalogue=(
+            f"{RESULTS}/static_ns/conditional/"
+            f"{{band_id}}/final_catalogue.csv"
+        ),
+        summary=(
+            f"{RESULTS}/static_ns/conditional/"
+            f"{{band_id}}/summary.json"
+        ),
+    params:
+        py=config["python"],
+        dim_per=CONDITIONAL.get("dim_per", CONSENSUS.get("dim_per", 7)),
+        f0_index=CONDITIONAL.get("f0_index", CONSENSUS.get("f0_index", 0)),
+        p_index=CONDITIONAL.get("p_index", CONSENSUS.get("p_index", 6)),
+        p_active_min=CONDITIONAL.get(
+            "p_active_min",
+            CONSENSUS.get("p_active_min", 0.5),
+        ),
+        representative_min_width_hz=CONDITIONAL.get("representative_min_width_hz", 0.0),
+        duplicate_bins_hz=CONDITIONAL.get("duplicate_bins_hz", 0.0),
+        exclusive_drop_tol=CONDITIONAL.get("exclusive_drop_tol", 0.0),
+        prefilter_args=conditional_prefilter_args(),
+        diagnostic_arg=(
+            "--run-integration-diagnostic"
+            if CONDITIONAL.get("run_integration_diagnostic", False)
+            else ""
+        ),
+        problem_factory=CONDITIONAL.get(
+            "problem_factory",
+            "jax_samplers.problems.lisa_gb_transdim_problem:make",
+        ),
+    shell:
+        r"""
+        {params.py} scripts/conditional_likelihood_selection.py \
+          --candidates-csv {input.candidates} \
+          --posteriors {input.posteriors} \
+          --config {input.config} \
+          --window-id {wildcards.band_id} \
+          --dim-per {params.dim_per} \
+          --f0-index {params.f0_index} \
+          --p-index {params.p_index} \
+          --p-active-min {params.p_active_min} \
+          {params.prefilter_args} \
+          {params.diagnostic_arg} \
+          --representative-min-width-hz {params.representative_min_width_hz} \
+          --duplicate-bins-hz {params.duplicate_bins_hz} \
+          --exclusive-drop-tol {params.exclusive_drop_tol} \
+          --problem-factory {params.problem_factory} \
+          --out-significance {output.significance} \
+          --out-final-catalogue {output.final_catalogue} \
+          --out-summary {output.summary}
+        """
