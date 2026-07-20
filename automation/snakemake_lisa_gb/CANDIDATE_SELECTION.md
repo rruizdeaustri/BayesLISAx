@@ -114,8 +114,10 @@ The reported statistic is a **fixed-configuration conditional likelihood**:
 `delta_logl_fixed = logL_full - logL_without_i` and
 `rho_cond_fixed = sqrt(max(0, 2 * delta_logl_fixed))`. Remaining candidates are
 not reoptimized after one candidate is removed. Placeholder columns
-`delta_logl_profiled` and `rho_cond_profiled` are reserved for a later profiled
-conditional statistic.
+`delta_logl_profiled = logL_full_profiled - logL_without_i_profiled` and
+`rho_cond_profiled = sqrt(max(0, 2 * delta_logl_profiled))` are populated when profiling is enabled.
+`rho_cond_profiled` is a profiled likelihood-derived ranking statistic, not a calibrated physical
+SNR; K-dependent likelihood marginalization normalization may affect cross-K interpretation.
 
 Assumptions documented in `summary.json` include: posterior bundles contain
 physical decoded rows `[f0, fdot, iota, psi, lam, beta, p]`; all seven physical
@@ -146,7 +148,7 @@ The reported statistic is fixed-configuration, not profiled:
 - `rho_cond_fixed = sqrt(max(0, 2 * delta_logl_fixed))`
 
 The remaining candidates are held fixed. `delta_logl_profiled` and
-`rho_cond_profiled` are placeholder columns for a future implementation that
+`rho_cond_profiled` are populated by the optional profiled implementation that
 reoptimizes the remaining candidates after each removal.
 
 Posterior representatives are decoded physical rows with layout

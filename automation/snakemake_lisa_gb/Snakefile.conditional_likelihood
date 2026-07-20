@@ -83,6 +83,17 @@ rule conditional_likelihood_selection:
             "run_integration_diagnostic",
             "--run-integration-diagnostic",
         ),
+        profile_likelihood=conditional_bool_flag(
+            "profile_likelihood",
+            "--profile-likelihood",
+        ),
+        optimized_parameter_mask=" ".join(CONDITIONAL.get("optimized_parameter_mask", ["f0", "fdot", "lam", "beta"])),
+        optimizer_method=CONDITIONAL.get("optimizer_method", "L-BFGS-B"),
+        optimizer_maxiter=CONDITIONAL.get("optimizer_maxiter", 100),
+        optimizer_tol=CONDITIONAL.get("optimizer_tol", 1.0e-6),
+        optimizer_gtol=CONDITIONAL.get("optimizer_gtol", 1.0e-5),
+        profile_selection_min_delta=CONDITIONAL.get("profile_selection_min_delta", 0.0),
+        posterior_baseline_draws=CONDITIONAL.get("posterior_baseline_draws", 0),
         repo_root=Path(workflow.basedir).parents[1],
     shell:
         r"""
@@ -102,6 +113,14 @@ rule conditional_likelihood_selection:
           --exclusive-drop-tol {params.exclusive_drop_tol} \
           --problem-factory {params.problem_factory} \
           {params.integration_diagnostic} \
+          {params.profile_likelihood} \
+          --optimized-parameter-mask {params.optimized_parameter_mask} \
+          --optimizer-method {params.optimizer_method} \
+          --optimizer-maxiter {params.optimizer_maxiter} \
+          --optimizer-tol {params.optimizer_tol} \
+          --optimizer-gtol {params.optimizer_gtol} \
+          --profile-selection-min-delta {params.profile_selection_min_delta} \
+          --posterior-baseline-draws {params.posterior_baseline_draws} \
           --out-significance {output.significance} \
           --out-final-catalogue {output.final_catalogue} \
           --out-summary {output.summary}

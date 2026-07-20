@@ -41,6 +41,17 @@ dry_run:
   n_live: 32
   num_inner_steps: 4
 
+conditional_likelihood:
+  profile_likelihood: false
+  optimized_parameter_mask: [f0, fdot, lam, beta]
+  optimizer_method: L-BFGS-B
+  optimizer_maxiter: 100
+  optimizer_tol: 1.0e-6
+  optimizer_gtol: 1.0e-5
+  profile_selection_min_delta: 0.0
+  posterior_baseline_draws: 0
+  run_integration_diagnostic: false
+
 catalogue:
   margin_hz: 5.0e-6
   snr_thresholds: [0.5, 1, 2, 3, 4, 5, 7, 10]
