@@ -156,7 +156,6 @@ def physical_catalogue_to_theta(
     *,
     problem: object,
     active_mask: np.ndarray | None = None,
-    active_p: float = 1.0 - 1e-6,
     inactive_p: float = 1e-6,
 ) -> np.ndarray:
     """Pack physical representative rows into the backend's unconstrained vector.
@@ -167,6 +166,10 @@ def physical_catalogue_to_theta(
     parameters are analytically profiled/integrated when ``marg_Aphi=True``.  If
     explicit amplitudes are used, unavailable ``lnA`` and ``phi0`` are filled by
     prior-box midpoints and reported as a limitation in ``summary.json``.
+
+    The gate coordinate for each *active* slot is derived from the posterior
+    ``p`` value stored in ``physical_rows[slot, 6]``.  Inactive slots are forced
+    to ``inactive_p`` regardless of the stored value.
     """
     rows = np.asarray(physical_rows, dtype=float)
     k = int(getattr(problem, "Kmax"))
@@ -191,7 +194,8 @@ def physical_catalogue_to_theta(
         if slot < rows.shape[0]:
             f0, fdot, iota, psi, lam, beta, _p = rows[slot, :7]
             base = [logit01((f0 - fmin) / span), fdot, iota, psi, lam, beta]
-            p = active_p if bool(active_mask[slot]) else inactive_p
+            # Preserve the posterior-derived gate probability for active slots.
+            p = float(np.clip(_p, inactive_p, 1.0 - inactive_p)) if bool(active_mask[slot]) else inactive_p
         else:
             f0 = fmin + 0.5 * span
             base = [logit01(0.5), 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -242,13 +246,35 @@ def evaluate_conditional_significance_variable_k(
         without_physical = np.delete(physical, idx, axis=0)
         if without_physical.shape[0] == 0:
             # K=0 is not currently supported by the GBJAX production factory.
-            # Leave a profiled/statistical path for this edge case and fail below
-            # if no source produces a measurable likelihood change.
-            logl_without = logl_full
-            theta_without = np.asarray([], dtype=float)
-        else:
-            without_problem = load_problem_for_kmax(config_path, factory, without_physical.shape[0], tmpdir)
-            logl_without, theta_without = _loglike_for_physical_rows(without_problem, without_physical)
+            # Emit a clear per-candidate status and skip this source in the
+            # all-rejected sanity check rather than aborting the full workflow.
+            out = dict(rep.candidate_row)
+            out.update(
+                {
+                    "source_id": rep.source_id,
+                    "representative_f0_hz": rep.physical[0],
+                    "representative_fdot": rep.physical[1],
+                    "representative_iota": rep.physical[2],
+                    "representative_psi": rep.physical[3],
+                    "representative_lam": rep.physical[4],
+                    "representative_beta": rep.physical[5],
+                    "representative_p": rep.physical[6],
+                    "representative_support_samples": rep.n_support_samples,
+                    "logL_full": logl_full,
+                    "logL_without_i": "",
+                    "delta_logl_fixed": "",
+                    "rho_cond_fixed": "",
+                    "delta_logl_profiled": "",
+                    "rho_cond_profiled": "",
+                    "removal_convention": "K=0 baseline not supported; single-candidate window",
+                    "conditional_status": "k1_no_baseline",
+                    "diagnostic_only_fields": "statistically_selected,posterior_inclusion_score,sampling_quality,local_fdr,cumulative_bfdr",
+                }
+            )
+            rows.append(out)
+            continue
+        without_problem = load_problem_for_kmax(config_path, factory, without_physical.shape[0], tmpdir)
+        logl_without, theta_without = _loglike_for_physical_rows(without_problem, without_physical)
         delta = logl_full - logl_without
         rho = math.sqrt(max(0.0, 2.0 * delta))
         any_logl_changed = any_logl_changed or (logl_without != logl_full)
@@ -273,14 +299,19 @@ def evaluate_conditional_significance_variable_k(
                 "rho_cond_fixed": rho,
                 "delta_logl_profiled": "",
                 "rho_cond_profiled": "",
-                "removal_convention": "K-1 problem with removed source block omitted" if without_physical.shape[0] else "K=0 unsupported; no-op edge case",
+                "removal_convention": "K-1 problem with removed source block omitted",
                 "conditional_status": "kept" if delta > 0.0 else "rejected",
                 "diagnostic_only_fields": "statistically_selected,posterior_inclusion_score,sampling_quality,local_fdr,cumulative_bfdr",
             }
         )
         rows.append(out)
 
-    if any_theta_changed and not any_logl_changed and rows:
+    # Sanity check: only raise if there were evaluable candidates and none of
+    # them produced a measurable likelihood change, which suggests a
+    # parameterisation problem.  Rows with k1_no_baseline are excluded because
+    # their K=0 baseline is not attempted.
+    evaluable = [r for r in rows if r.get("conditional_status") != "k1_no_baseline"]
+    if evaluable and any_theta_changed and not any_logl_changed:
         raise RuntimeError(
             "conditional likelihood deactivation produced changed theta/K configurations, "
             "but logL was identical for every source. Refusing to write all-rejected "
@@ -292,6 +323,9 @@ def evaluate_conditional_significance_variable_k(
         row["mutually_exclusive_group"] = ""
     for i in range(len(rows)):
         for j in range(i + 1, len(rows)):
+            # Skip comparisons involving k1_no_baseline rows which have no delta/rho.
+            if rows[i].get("conditional_status") == "k1_no_baseline" or rows[j].get("conditional_status") == "k1_no_baseline":
+                continue
             df = abs(float(rows[i]["representative_f0_hz"]) - float(rows[j]["representative_f0_hz"]))
             if df <= duplicate_bins_hz:
                 weaker, stronger = (i, j) if rows[i]["rho_cond_fixed"] < rows[j]["rho_cond_fixed"] else (j, i)
@@ -443,7 +477,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             exclusive_drop_tol=args.exclusive_drop_tol,
             full_problem=full_problem,
         )
-    final_rows = [row for row in rows if row.get("conditional_status") == "kept"]
+    final_rows = [row for row in rows if row.get("conditional_status") in {"kept", "k1_no_baseline"}]
     write_csv(args.out_significance, rows)
     write_csv(args.out_final_catalogue, final_rows)
     summary = {

@@ -82,6 +82,7 @@ rule conditional_likelihood_selection:
         ),
     shell:
         r"""
+        PYTHONPATH={config[repo_root]}/src:${{PYTHONPATH:-}} \
         {params.py} scripts/conditional_likelihood_selection.py \
           --candidates-csv {input.candidates} \
           --posteriors {input.posteriors} \

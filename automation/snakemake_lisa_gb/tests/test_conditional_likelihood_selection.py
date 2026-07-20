@@ -1,6 +1,7 @@
 from pathlib import Path
 import csv
 import json
+import math
 import sys
 
 import numpy as np
@@ -207,3 +208,96 @@ def test_integration_writes_expected_outputs(tmp_path, monkeypatch):
     assert [row["cluster_id"] for row in rows] == ["0", "1"]
     assert "delta_logl_fixed" in rows[0]
     assert "delta_logl_profiled" in rows[0]
+
+
+def test_single_candidate_window_emits_k1_no_baseline_status(tmp_path, monkeypatch):
+    """K=1 window must not raise; the sole candidate should carry k1_no_baseline."""
+    import conditional_likelihood_selection as cls
+
+    reps = [
+        RepresentativeCandidate(0, {"cluster_id": "0"}, np.array([1.0, 0, 0, 0, 0, 0, 0.9]), 5),
+    ]
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"model": {"Kmax": 1}}))
+    monkeypatch.setattr(cls, "load_problem_for_kmax", lambda config, factory, kmax, tmpdir: SyntheticProblem(kmax))
+    monkeypatch.setattr(SyntheticProblem, "loglikelihood", lambda self, theta: synthetic_loglike(theta), raising=False)
+
+    rows, logl_full = evaluate_conditional_significance_variable_k(
+        reps,
+        str(config_path),
+        "unused:factory",
+        tmp_path,
+        duplicate_bins_hz=0.0,
+        exclusive_drop_tol=0.0,
+    )
+    assert len(rows) == 1
+    assert rows[0]["conditional_status"] == "k1_no_baseline"
+    assert rows[0]["delta_logl_fixed"] == ""
+    assert rows[0]["rho_cond_fixed"] == ""
+    assert rows[0]["removal_convention"] == "K=0 baseline not supported; single-candidate window"
+    assert rows[0]["logL_full"] == logl_full
+
+
+def test_single_candidate_integration_produces_outputs(tmp_path, monkeypatch):
+    """End-to-end main() must succeed and write all outputs for a K=1 window."""
+    import conditional_likelihood_selection as cls
+
+    candidates = tmp_path / "candidates.csv"
+    with candidates.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["window_id", "cluster_id", "statistically_selected", "f0_median_hz", "f0_q05_hz", "f0_q95_hz", "posterior_inclusion_score"])
+        writer.writeheader()
+        writer.writerow({"window_id": "w", "cluster_id": "0", "statistically_selected": "true", "f0_median_hz": "1.0", "f0_q05_hz": "0.95", "f0_q95_hz": "1.05", "posterior_inclusion_score": "0.9"})
+    posterior = tmp_path / "posterior.npz"
+    np.savez_compressed(posterior, samples=np.array([[1.0, 0, 0, 0, 0, 0, 0.9]]), weights=np.array([1.0]), seed=np.array("0"))
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"model": {"Kmax": 1}}))
+    monkeypatch.setattr(cls, "load_problem_for_kmax", lambda config, factory, kmax, tmpdir: SyntheticProblem(kmax))
+    monkeypatch.setattr(SyntheticProblem, "loglikelihood", lambda self, theta: synthetic_loglike(theta), raising=False)
+
+    out_sig = tmp_path / "candidate_significance.csv"
+    out_final = tmp_path / "final_catalogue.csv"
+    out_summary = tmp_path / "summary.json"
+    cls.main([
+        "--candidates-csv", str(candidates),
+        "--posteriors", str(posterior),
+        "--config", str(config_path),
+        "--window-id", "w",
+        "--out-significance", str(out_sig),
+        "--out-final-catalogue", str(out_final),
+        "--out-summary", str(out_summary),
+    ])
+    assert out_sig.exists()
+    assert out_final.exists()
+    with out_sig.open(newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert rows[0]["conditional_status"] == "k1_no_baseline"
+    with out_final.open(newline="") as fh:
+        final_rows = list(csv.DictReader(fh))
+    assert len(final_rows) == 1, "k1_no_baseline candidate should appear in final catalogue"
+
+
+def test_pack_preserves_posterior_gate_probability():
+    """Active slots must use the posterior p, not a hardcoded near-1 value."""
+    p_posterior = 0.72
+    theta = physical_catalogue_to_theta(
+        np.array([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, p_posterior]]),
+        problem=SyntheticProblem(kmax=1),
+    )
+    # Decode gate: logit space → sigmoid
+    gate_u = theta[-1]  # last element of the packed vector (7 dims for kmax=1)
+    p_decoded = 1.0 / (1.0 + math.exp(-gate_u))
+    assert abs(p_decoded - p_posterior) < 1e-9, (
+        f"packed gate decoded to {p_decoded:.6g}, expected {p_posterior}"
+    )
+
+
+def test_pack_inactive_slot_ignores_posterior_p():
+    """Inactive slots must use inactive_p regardless of the stored posterior p."""
+    theta = physical_catalogue_to_theta(
+        np.array([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.95]]),
+        problem=SyntheticProblem(kmax=1),
+        active_mask=np.array([False]),
+    )
+    gate_u = theta[-1]
+    p_decoded = 1.0 / (1.0 + math.exp(-gate_u))
+    assert p_decoded < 1e-5, f"inactive slot decoded to {p_decoded:.6g}, expected < 1e-5"
