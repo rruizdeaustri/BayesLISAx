@@ -212,3 +212,72 @@ def test_conditional_snakefile_wires_pythonpath_and_diagnostic_flag():
     assert "PYTHONPATH={params.repo_root}/src" in snakefile
     assert "run_integration_diagnostic" in snakefile
     assert "--run-integration-diagnostic" in snakefile
+
+
+def test_profiled_likelihood_fields_and_mask_improve_or_preserve():
+    from conditional_likelihood_selection import OptimizerSettings
+    reps = [
+        RepresentativeCandidate(0, {"cluster_id": "0"}, np.array([1.2, 0, 0, 0, 0, 0, 0.9]), 1),
+        RepresentativeCandidate(1, {"cluster_id": "1"}, np.array([2.2, 0, 0, 0, 0, 0, 0.9]), 1),
+    ]
+    rows, _ = evaluate_conditional_significance(
+        reps,
+        SyntheticProblem(2),
+        lambda k: SyntheticProblem(k),
+        duplicate_bins_hz=0.0,
+        exclusive_drop_tol=-99.0,
+        optimizer_settings=OptimizerSettings(enabled=True, mask=("f0",), maxiter=20),
+    )
+    assert all(np.isfinite(float(r["delta_logl_profiled"])) for r in rows)
+    assert all(r["optimized_parameter_mask"] == "f0" for r in rows)
+    assert rows[0]["logL_full_profiled"] >= rows[0]["logL_full_initial"]
+    assert all(float(r["logL_without_i_profiled"]) >= float(r["logL_without_i_initial"]) for r in rows)
+
+
+def test_failed_optimizer_handling_with_bad_mask():
+    from conditional_likelihood_selection import OptimizerSettings, profile_theta, physical_catalogue_to_theta
+    theta = physical_catalogue_to_theta(np.array([[1.0, 0, 0, 0, 0, 0, 0.9]]), problem=SyntheticProblem(1))
+    result = profile_theta(SyntheticProblem(1), theta, k_active=1, settings=OptimizerSettings(enabled=True, mask=("not_a_parameter",)))
+    assert result.success is False
+    assert "unsupported" in result.message
+
+
+def test_posterior_baseline_selection():
+    from conditional_likelihood_selection import evaluate_posterior_baseline
+    bundle = PosteriorBundle(Path("seed9/posterior.npz"), "9", np.array([
+        [[3.0, 0, 0, 0, 0, 0, 0.9]],
+        [[1.0, 0, 0, 0, 0, 0, 0.9]],
+    ]), np.ones(2))
+    best, seed, draw = evaluate_posterior_baseline([bundle], SyntheticProblem(1), max_draws_per_seed=2)
+    assert np.isfinite(best)
+    assert seed == "9"
+    assert draw == 1
+
+
+def test_truth_fields_do_not_affect_profiled_selection():
+    rows = [
+        {"cluster_id": "0", "catalogue_frequency_hz": "999", "statistically_selected": "false"},
+        {"cluster_id": "1", "catalogue_frequency_hz": "0", "statistically_selected": "true"},
+    ]
+    assert [r["cluster_id"] for r in selected_candidate_rows(rows)] == ["0", "1"]
+
+
+def test_cli_profiled_options_and_posterior_baseline(tmp_path, monkeypatch):
+    import conditional_likelihood_selection as cls
+    candidates = tmp_path / "candidates.csv"
+    with candidates.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["cluster_id", "f0_median_hz", "f0_q05_hz", "f0_q95_hz"])
+        writer.writeheader(); writer.writerow({"cluster_id": "0", "f0_median_hz": "1.2", "f0_q05_hz": "1.1", "f0_q95_hz": "1.3"})
+    posterior = tmp_path / "posterior.npz"
+    np.savez_compressed(posterior, samples=np.array([[1.2,0,0,0,0,0,0.9],[1.0,0,0,0,0,0,0.9]]), weights=np.ones(2), seed=np.array("7"))
+    monkeypatch.setattr(cls, "load_problem", lambda config, factory: SyntheticProblem(json.loads(Path(config).read_text()).get("model", {}).get("Kmax", 1)))
+    cfg = tmp_path / "config.json"; cfg.write_text(json.dumps({"model": {"Kmax": 1}}))
+    out_sig = tmp_path / "sig.csv"; out_final = tmp_path / "final.csv"; out_summary = tmp_path / "summary.json"
+    cls.main(["--candidates-csv", str(candidates), "--posteriors", str(posterior), "--config", str(cfg), "--window-id", "w", "--profile-likelihood", "--optimized-parameter-mask", "f0", "--posterior-baseline-draws", "2", "--out-significance", str(out_sig), "--out-final-catalogue", str(out_final), "--out-summary", str(out_summary)])
+    payload = json.loads(out_summary.read_text())
+    assert payload["profile_likelihood_enabled"] is True
+    assert payload["best_posterior_seed"] == "7"
+    with out_sig.open(newline="") as fh:
+        row = next(csv.DictReader(fh))
+    assert row["optimized_parameter_mask"] == "f0"
+    assert "rho_cond_profiled" in row
