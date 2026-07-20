@@ -9,6 +9,10 @@ include: "Snakefile.candidate_selection"
 CONDITIONAL = dict(config.get("conditional_likelihood", {}))
 
 
+def conditional_bool_flag(name, flag):
+    return flag if CONDITIONAL.get(name, False) else ""
+
+
 def conditional_prefilter_args():
     args = []
     if CONDITIONAL.get("minimum_mean_inclusion") is not None:
@@ -75,8 +79,14 @@ rule conditional_likelihood_selection:
             "problem_factory",
             "jax_samplers.problems.lisa_gb_transdim_problem:make",
         ),
+        integration_diagnostic=conditional_bool_flag(
+            "run_integration_diagnostic",
+            "--run-integration-diagnostic",
+        ),
+        repo_root=Path(workflow.basedir).parents[1],
     shell:
         r"""
+        PYTHONPATH={params.repo_root}/src:${{PYTHONPATH:-}} \
         {params.py} scripts/conditional_likelihood_selection.py \
           --candidates-csv {input.candidates} \
           --posteriors {input.posteriors} \
@@ -91,6 +101,7 @@ rule conditional_likelihood_selection:
           --duplicate-bins-hz {params.duplicate_bins_hz} \
           --exclusive-drop-tol {params.exclusive_drop_tol} \
           --problem-factory {params.problem_factory} \
+          {params.integration_diagnostic} \
           --out-significance {output.significance} \
           --out-final-catalogue {output.final_catalogue} \
           --out-summary {output.summary}

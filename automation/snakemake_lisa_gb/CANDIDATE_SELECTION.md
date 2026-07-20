@@ -128,3 +128,56 @@ with a near-zero gate probability; if the number of candidates exceeds the
 likelihood `Kmax`, the stage fails clearly unless optional prefilters reduce the
 set; `model.order_f0=true` is not supported because the inverse ordered-frequency
 transform is not unique.
+
+### Conditional-likelihood implementation notes
+
+The conditional-likelihood stage validates the full consensus-cluster union by
+default. `statistically_selected`, BFDR quantities, `sampling_quality`,
+`local_fdr`, and `cumulative_bfdr` are carried to the outputs as diagnostics;
+they do not admit or reject a cluster. Optional production-size prefilters may be
+used before validation: `minimum_mean_inclusion`, integer `minimum_seed_support`
+(from `n_seed_support`), and `allowed_sampling_quality`. For a first Kmax=4 run,
+`minimum_mean_inclusion: 0.66` is a reasonable configurable prefilter when the
+unfiltered union is larger than the likelihood can represent.
+
+The reported statistic is fixed-configuration, not profiled:
+
+- `delta_logl_fixed = logL_full - logL_without_i`
+- `rho_cond_fixed = sqrt(max(0, 2 * delta_logl_fixed))`
+
+The remaining candidates are held fixed. `delta_logl_profiled` and
+`rho_cond_profiled` are placeholder columns for a future implementation that
+reoptimizes the remaining candidates after each removal.
+
+Posterior representatives are decoded physical rows with layout
+`[f0, fdot, iota, psi, lam, beta, p]`. Before likelihood evaluation they are
+inverse-packed to the latent/unconstrained `theta_u` expected by
+`problem.loglikelihood`, using the same production transforms: unordered
+frequency is mapped with `logit((f0 - f_min) / (f_max - f_min))`, angular and
+`fdot` coordinates are passed in the production unconstrained convention, and the
+representative gate probability `p` is preserved with a logit transform. Active
+sources are not forced to `p ≈ 1`.
+
+Each representative uses all seven parameters from a single posterior source
+component/draw: the source component nearest the weighted median cluster
+frequency. The output records the representative seed, draw index, slot index,
+and the seven representative parameters. Because different clusters may choose
+representatives from different draws and seeds, the assembled full likelihood
+vector is a synthetic joint configuration rather than a posterior sample.
+
+Source removal follows the production `K-1` convention. To evaluate candidate
+`i`, the stage constructs a `K-1` problem and omits candidate `i`'s complete
+seven-parameter block; it does not fake removal by changing an ignored gate
+coordinate. If the filtered candidate union exceeds `model.Kmax`, the workflow
+fails clearly instead of truncating the catalogue.
+
+For one-candidate (`K=1`) windows, the stage attempts a valid `K=0`/no-source
+baseline. If the production problem factory does not support `K=0`, the row is
+marked `unsupported_single_candidate_baseline` and the workflow continues. This
+known case is exempt from the multi-candidate all-identical leave-one-out guard.
+In multi-candidate runs, an exact equality of every leave-one-out likelihood to
+`logL_full` is treated as a hard error.
+
+Truth or catalogue information must never affect candidate selection. Truth
+matches, injected catalogue frequencies, and approximate catalogue SNRs may be
+reported only as validation diagnostics after selections have already been made.

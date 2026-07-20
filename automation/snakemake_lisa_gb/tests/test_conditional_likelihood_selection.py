@@ -19,23 +19,28 @@ from within_window_consensus import PosteriorBundle  # noqa: E402
 
 
 class SyntheticProblem:
-    Kmax = 3
     use_gates = True
     marg_Aphi = True
     order_f0 = False
     f_min_cfg = 0.0
     f_max_cfg = 10.0
 
+    def __init__(self, Kmax=3):
+        self.Kmax = Kmax
 
-def decode(theta):
-    th = np.asarray(theta).reshape(3, 7)
+    def loglikelihood(self, theta):
+        return synthetic_loglike(theta, self.Kmax)
+
+
+def decode(theta, kmax=3):
+    th = np.asarray(theta).reshape(kmax, 7)
     p = 1.0 / (1.0 + np.exp(-th[:, 6]))
     f0 = 10.0 / (1.0 + np.exp(-th[:, 0]))
     return f0, p
 
 
-def synthetic_loglike(theta):
-    f0, p = decode(theta)
+def synthetic_loglike(theta, kmax=3):
+    f0, p = decode(theta, kmax)
     signal = np.sum(p * np.exp(-0.5 * ((f0 - 1.0) / 0.05) ** 2))
     signal += 0.5 * np.sum(p * np.exp(-0.5 * ((f0 - 2.0) / 0.05) ** 2))
     return signal
@@ -52,29 +57,28 @@ def test_selected_candidate_rows_ignores_bfdr_and_truth_columns_by_default():
 
 def test_selected_candidate_rows_optional_prefilters():
     rows = [
-        {"cluster_id": "0", "mean_inclusion": "0.9", "seed_support_fraction": "1.0", "sampling_quality": "robust"},
-        {"cluster_id": "1", "mean_inclusion": "0.2", "seed_support_fraction": "1.0", "sampling_quality": "robust"},
-        {"cluster_id": "2", "mean_inclusion": "0.8", "seed_support_fraction": "0.25", "sampling_quality": "confused"},
+        {"cluster_id": "0", "mean_inclusion": "0.9", "n_seed_support": "3", "sampling_quality": "robust"},
+        {"cluster_id": "1", "mean_inclusion": "0.2", "n_seed_support": "3", "sampling_quality": "robust"},
+        {"cluster_id": "2", "mean_inclusion": "0.8", "n_seed_support": "1", "sampling_quality": "confused"},
     ]
     selected = selected_candidate_rows(
         rows,
         minimum_mean_inclusion=0.5,
-        minimum_seed_support=0.5,
+        minimum_seed_support=2,
         allowed_sampling_quality={"robust"},
     )
     assert [row["cluster_id"] for row in selected] == ["0"]
 
 
-def test_pack_deactivates_inactive_slots():
+def test_pack_preserves_representative_p_and_pads_inactive_slots():
     theta = physical_catalogue_to_theta(
         np.array([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8]]),
         problem=SyntheticProblem(),
-        active_mask=np.array([False]),
     )
     f0, p = decode(theta)
     assert np.isclose(f0[0], 1.0)
-    assert p[0] < 1e-5
-    assert np.all(p[1:] < 1e-5)
+    assert np.isclose(p[0], 0.8)
+    assert np.all(p[1:] < 1e-6)
 
 
 def test_conditional_significance_with_synthetic_likelihood_flags_duplicate():
@@ -86,8 +90,8 @@ def test_conditional_significance_with_synthetic_likelihood_flags_duplicate():
     problem = SyntheticProblem()
     rows, logl = evaluate_conditional_significance(
         reps,
-        synthetic_loglike,
-        lambda phys, active: physical_catalogue_to_theta(phys, problem=problem, active_mask=active),
+        problem,
+        lambda k: problem,
         duplicate_bins_hz=0.02,
         exclusive_drop_tol=0.0,
     )
@@ -130,7 +134,39 @@ def test_build_representatives_from_posterior_cluster_summary():
     )
     assert reps[0].n_support_samples == 2
     assert np.isclose(reps[0].physical[0], 1.1)
+    assert np.allclose(reps[0].physical, [1.1, 0, 0.2, 0.3, 0.4, 0.5, 0.8])
+    assert reps[0].representative_seed == "0"
+    assert reps[0].representative_draw_index == 1
+    assert reps[0].representative_slot_index == 0
 
+
+
+def test_minimum_seed_support_integer_threshold_retains_2_and_3():
+    rows = [{"cluster_id": str(n), "n_seed_support": str(n)} for n in [1, 2, 3]]
+    assert [r["cluster_id"] for r in selected_candidate_rows(rows, minimum_seed_support=2)] == ["2", "3"]
+
+
+def test_one_candidate_k1_unsupported_baseline_continues():
+    reps = [RepresentativeCandidate(0, {"cluster_id": "0"}, np.array([1.0, 0, 0, 0, 0, 0, 0.9]), 1)]
+    rows, logl = evaluate_conditional_significance(reps, SyntheticProblem(), lambda k: None, duplicate_bins_hz=0.0, exclusive_drop_tol=0.0)
+    assert np.isfinite(logl)
+    assert rows[0]["conditional_status"] == "unsupported_single_candidate_baseline"
+
+
+def test_all_identical_multi_candidate_likelihood_guard():
+    class FlatProblem(SyntheticProblem):
+        def loglikelihood(self, theta):
+            return 1.0
+    reps = [
+        RepresentativeCandidate(0, {"cluster_id": "0"}, np.array([1.0, 0, 0, 0, 0, 0, 0.9]), 1),
+        RepresentativeCandidate(1, {"cluster_id": "1"}, np.array([2.0, 0, 0, 0, 0, 0, 0.9]), 1),
+    ]
+    try:
+        evaluate_conditional_significance(reps, FlatProblem(), lambda k: FlatProblem(), duplicate_bins_hz=0.0, exclusive_drop_tol=0.0)
+    except AssertionError as exc:
+        assert "all leave-one-out likelihoods" in str(exc)
+    else:
+        raise AssertionError("expected all-identical guard")
 
 def test_integration_writes_expected_outputs(tmp_path, monkeypatch):
     import conditional_likelihood_selection as cls
@@ -143,8 +179,9 @@ def test_integration_writes_expected_outputs(tmp_path, monkeypatch):
         writer.writerow({"window_id": "w", "cluster_id": "1", "statistically_selected": "false", "f0_median_hz": "2.0", "f0_q05_hz": "1.95", "f0_q95_hz": "2.05", "posterior_inclusion_score": "0.2"})
     posterior = tmp_path / "posterior.npz"
     np.savez_compressed(posterior, samples=np.array([[1.0, 0, 0, 0, 0, 0, 0.9, 2.0, 0, 0, 0, 0, 0, 0.9]]), weights=np.array([1.0]), seed=np.array("0"))
-    monkeypatch.setattr(cls, "load_problem", lambda config, factory: SyntheticProblem())
-    monkeypatch.setattr(SyntheticProblem, "loglikelihood", lambda self, theta: synthetic_loglike(theta), raising=False)
+    monkeypatch.setattr(cls, "load_problem", lambda config, factory: SyntheticProblem(json.loads(Path(config).read_text()).get("model", {}).get("Kmax", 3)))
+    monkeypatch.setattr(SyntheticProblem, "loglikelihood", lambda self, theta: synthetic_loglike(theta, self.Kmax), raising=False)
+    (tmp_path / "config.json").write_text(json.dumps({"model": {"Kmax": 3}}))
 
     out_sig = tmp_path / "candidate_significance.csv"
     out_final = tmp_path / "final_catalogue.csv"
@@ -168,3 +205,10 @@ def test_integration_writes_expected_outputs(tmp_path, monkeypatch):
     assert [row["cluster_id"] for row in rows] == ["0", "1"]
     assert "delta_logl_fixed" in rows[0]
     assert "delta_logl_profiled" in rows[0]
+
+
+def test_conditional_snakefile_wires_pythonpath_and_diagnostic_flag():
+    snakefile = (Path(__file__).resolve().parents[1] / "Snakefile.conditional_likelihood").read_text()
+    assert "PYTHONPATH={params.repo_root}/src" in snakefile
+    assert "run_integration_diagnostic" in snakefile
+    assert "--run-integration-diagnostic" in snakefile
