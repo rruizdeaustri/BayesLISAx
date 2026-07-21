@@ -134,43 +134,215 @@ def _logl(problem: object, theta: np.ndarray) -> float:
     if not np.isfinite(val): raise FloatingPointError("production loglikelihood returned non-finite value")
     return val
 
-def profile_theta(problem: object, theta_initial: np.ndarray, *, k_active: int, settings: OptimizerSettings) -> ProfileResult:
-    theta0=np.asarray(theta_initial, dtype=float).reshape(-1); initial=_logl(problem, theta0)
+def _parameter_scales(
+    problem: object,
+    k_active: int,
+    names: Sequence[str],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return optimized indices and stable displacement scales.
+
+    The optimizer works with dimensionless displacement coordinates z:
+
+        theta_u = theta_u_initial + scale * z
+
+    The scales correspond to small physically meaningful moves.
+    """
+    marg = bool(getattr(problem, "marg_Aphi", True))
+    use_gates = bool(getattr(problem, "use_gates", True))
+    per = (6 if marg else 8) + (1 if use_gates else 0)
+
+    layout = (
+        ["f0", "fdot", "iota", "psi", "lam", "beta"]
+        if marg
+        else ["lnA", "f0", "fdot", "phi0", "iota", "psi", "lam", "beta"]
+    )
+    if use_gates:
+        layout.append("p")
+
+    # Scales are in latent-coordinate units except fdot, which is stored
+    # directly in the current production parameterization.
+    scale_by_name = {
+        "lnA": 1.0e-2,
+        "f0": 1.0e-3,
+        "fdot": 1.0e-18,
+        "phi0": 1.0e-2,
+        "iota": 1.0e-2,
+        "psi": 1.0e-2,
+        "lam": 1.0e-2,
+        "beta": 1.0e-2,
+        "p": 1.0e-2,
+    }
+
+    wanted = set(names)
+    unsupported = wanted - set(layout)
+    if unsupported:
+        raise ValueError(
+            "optimized_parameter_mask contains unsupported names: "
+            f"{sorted(unsupported)}"
+        )
+
+    indices: list[int] = []
+    scales: list[float] = []
+
+    for slot in range(k_active):
+        for local_index, name in enumerate(layout):
+            if name in wanted:
+                indices.append(slot * per + local_index)
+                scales.append(scale_by_name[name])
+
+    return np.asarray(indices, dtype=int), np.asarray(scales, dtype=float)
+
+
+def profile_theta(
+    problem: object,
+    theta_initial: np.ndarray,
+    *,
+    k_active: int,
+    settings: OptimizerSettings,
+) -> ProfileResult:
+    """Profile selected parameters using scaled displacement coordinates."""
+
+    theta0 = np.asarray(theta_initial, dtype=float).reshape(-1)
+    initial = _logl(problem, theta0)
+
     try:
-        idx=_parameter_indices(problem, k_active, settings.mask)
+        idx, scales = _parameter_scales(
+            problem,
+            k_active,
+            settings.mask,
+        )
     except Exception as exc:
         if settings.fail_on_unsuccessful:
             raise
-        return ProfileResult(theta0, theta0.copy(), initial, initial, False, 0, float("nan"), str(exc))
+        return ProfileResult(
+            theta0,
+            theta0.copy(),
+            initial,
+            float("nan"),
+            False,
+            0,
+            float("nan"),
+            str(exc),
+        )
+
     if idx.size == 0 or not settings.enabled:
-        return ProfileResult(theta0, theta0.copy(), initial, initial, True, 0, 0.0, "profiling disabled or empty mask")
+        return ProfileResult(
+            theta0,
+            theta0.copy(),
+            initial,
+            initial,
+            True,
+            0,
+            0.0,
+            "profiling disabled or empty mask",
+        )
+
     try:
         from scipy.optimize import minimize
-        import jax, jax.numpy as jnp
-        def value_and_grad(x):
-            full=theta0.copy(); full[idx]=np.asarray(x, dtype=float)
-            def neg(z):
-                t=jnp.asarray(theta0); t=t.at[idx].set(z); return -problem.loglikelihood(t)
-            try:
-                val, grad=jax.value_and_grad(neg)(jnp.asarray(x, dtype=float)); val=float(val); grad=np.asarray(grad, dtype=float)
-            except Exception:
-                val=-_logl(problem, full); grad=None
-            if not np.isfinite(val) or (grad is not None and not np.all(np.isfinite(grad))): raise FloatingPointError("optimizer encountered non-finite objective/gradient")
-            return (val, grad) if grad is not None else val
-        opts={"maxiter": settings.maxiter}
-        if settings.gtol is not None: opts["gtol"]=settings.gtol
-        jac=True
-        try: res=minimize(value_and_grad, theta0[idx], method=settings.method, jac=jac, tol=settings.tol, options=opts)
-        except TypeError: res=minimize(lambda x: value_and_grad(x)[0], theta0[idx], method=settings.method, jac=False, tol=settings.tol, options=opts)
-        theta=theta0.copy(); theta[idx]=np.asarray(res.x, dtype=float); final=_logl(problem, theta)
-        gnorm=float(np.linalg.norm(np.asarray(getattr(res,"jac", np.array([])), dtype=float))) if getattr(res,"jac", None) is not None else float("nan")
-        success=bool(res.success) and final >= initial - 1e-8 and np.isfinite(final)
-        if settings.fail_on_unsuccessful and not success: raise RuntimeError(f"profile optimization failed: {res.message}")
-        if final < initial: theta, final = theta0.copy(), initial
-        return ProfileResult(theta0, theta, initial, final, success, int(getattr(res,"nit",0)), gnorm, str(getattr(res,"message","")))
+
+        def theta_from_z(z: np.ndarray) -> np.ndarray:
+            full = theta0.copy()
+            full[idx] = theta0[idx] + scales * np.asarray(z, dtype=float)
+            return full
+
+        def objective(z: np.ndarray) -> float:
+            value = -_logl(problem, theta_from_z(z))
+            if not np.isfinite(value):
+                raise FloatingPointError(
+                    "optimizer encountered a non-finite objective"
+                )
+            return value
+
+        z0 = np.zeros(idx.size, dtype=float)
+
+        options: dict[str, object] = {
+            "maxiter": settings.maxiter,
+        }
+
+        method = str(settings.method)
+
+        # The production Sangria likelihood currently gives unstable
+        # autodiff gradients for this local profiling problem. Use numerical
+        # or derivative-free optimization unless explicitly revisited.
+        if method.upper() == "POWELL":
+            options["xtol"] = settings.tol or 1.0e-6
+            options["ftol"] = settings.tol or 1.0e-6
+            result = minimize(
+                objective,
+                z0,
+                method="Powell",
+                bounds=[(-10.0, 10.0)] * idx.size,
+                options=options,
+            )
+        else:
+            # L-BFGS-B uses finite-difference derivatives in scaled z space.
+            if settings.gtol is not None:
+                options["gtol"] = settings.gtol
+            result = minimize(
+                objective,
+                z0,
+                method="L-BFGS-B",
+                jac=None,
+                bounds=[(-10.0, 10.0)] * idx.size,
+                tol=settings.tol,
+                options=options,
+            )
+
+        theta_profiled = theta_from_z(np.asarray(result.x, dtype=float))
+        final = _logl(problem, theta_profiled)
+
+        if final < initial:
+            theta_profiled = theta0.copy()
+            final = initial
+
+        jac = getattr(result, "jac", None)
+        gradient_norm = (
+            float(np.linalg.norm(np.asarray(jac, dtype=float)))
+            if jac is not None
+            else float("nan")
+        )
+
+        success = (
+            bool(result.success)
+            and np.isfinite(final)
+            and final >= initial - 1.0e-8
+        )
+
+        message = (
+            f"{getattr(result, 'message', '')}; "
+            f"nfev={getattr(result, 'nfev', -1)}; "
+            f"final_scaled_step_norm="
+            f"{float(np.linalg.norm(np.asarray(result.x, dtype=float))):.6g}"
+        )
+
+        if settings.fail_on_unsuccessful and not success:
+            raise RuntimeError(f"profile optimization failed: {message}")
+
+        return ProfileResult(
+            theta0,
+            theta_profiled,
+            initial,
+            final if success else float("nan"),
+            success,
+            int(getattr(result, "nit", 0)),
+            gradient_norm,
+            message,
+        )
+
     except Exception as exc:
-        if settings.fail_on_unsuccessful: raise
-        return ProfileResult(theta0, theta0.copy(), initial, initial, False, 0, float("nan"), str(exc))
+        if settings.fail_on_unsuccessful:
+            raise
+
+        return ProfileResult(
+            theta0,
+            theta0.copy(),
+            initial,
+            float("nan"),
+            False,
+            0,
+            float("nan"),
+            str(exc),
+        )
 
 def evaluate_posterior_baseline(bundles: Sequence[PosteriorBundle], problem: object, *, max_draws_per_seed: int, p_index: int = 6) -> tuple[float | None, str, int]:
     if max_draws_per_seed <= 0: return None, "", -1
@@ -211,9 +383,35 @@ def evaluate_conditional_significance(reps: Sequence[RepresentativeCandidate], f
                 init_km1 = theta_without
             prof_without=profile_theta(prob, init_km1, k_active=max(0,len(reps)-1), settings=settings)
             delta=logl_full-logl_without; rho=math.sqrt(max(0.0, 2.0*delta)); status="kept" if delta>0.0 else "rejected"; without_values.append(logl_without)
-        dprof=full_prof.logl_profiled-prof_without.logl_profiled if np.isfinite(prof_without.logl_profiled) else float("nan"); rprof=math.sqrt(max(0.0, 2.0*dprof)) if np.isfinite(dprof) else float("nan")
-        if settings.enabled and np.isfinite(dprof): status="kept" if dprof > settings.selection_min_delta else "rejected"
-        out.update({"source_id":rep.source_id,"representative_seed":rep.representative_seed,"representative_draw_index":rep.representative_draw_index,"representative_slot_index":rep.representative_slot_index,"representative_f0_hz":rep.physical[0],"representative_fdot":rep.physical[1],"representative_iota":rep.physical[2],"representative_psi":rep.physical[3],"representative_lam":rep.physical[4],"representative_beta":rep.physical[5],"representative_p":rep.physical[6],"representative_support_samples":rep.n_support_samples,"logL_full":logl_full,"logL_without_i":logl_without,"delta_logl_fixed":delta,"rho_cond_fixed":rho,"logL_full_initial":full_prof.logl_initial,"logL_full_profiled":full_prof.logl_profiled,"full_profile_success":full_prof.success,"full_profile_n_iter":full_prof.n_iter,"full_profile_gradient_norm":full_prof.gradient_norm,"logL_without_i_initial":prof_without.logl_initial,"logL_without_i_profiled":prof_without.logl_profiled,"delta_logl_profiled":dprof,"rho_cond_profiled":rprof,"profile_success":prof_without.success,"profile_n_iter":prof_without.n_iter,"profile_gradient_norm":prof_without.gradient_norm,"optimized_parameter_mask":",".join(settings.mask),"best_posterior_seed":"","best_posterior_draw_index":"","conditional_status":status,"diagnostic_only_fields":",".join(DIAGNOSTIC_ONLY_FIELDS)})
+
+
+        profiling_succeeded = (
+            settings.enabled
+            and full_prof.success
+            and prof_without.success
+            and np.isfinite(full_prof.logl_profiled)
+            and np.isfinite(prof_without.logl_profiled)
+        )
+
+        if profiling_succeeded:
+            dprof = full_prof.logl_profiled - prof_without.logl_profiled
+            rprof = math.sqrt(max(0.0, 2.0 * dprof))
+            status = (
+                "kept"
+                if dprof > settings.selection_min_delta
+                else "rejected"
+            )
+        else:
+            dprof = float("nan")
+            rprof = float("nan")
+            if settings.enabled:
+                status = (
+                    "kept_profile_failed"
+                    if np.isfinite(delta) and delta > 0.0
+                    else "rejected_profile_failed"
+                )
+
+        out.update({"source_id":rep.source_id,"representative_seed":rep.representative_seed,"representative_draw_index":rep.representative_draw_index,"representative_slot_index":rep.representative_slot_index,"representative_f0_hz":rep.physical[0],"representative_fdot":rep.physical[1],"representative_iota":rep.physical[2],"representative_psi":rep.physical[3],"representative_lam":rep.physical[4],"representative_beta":rep.physical[5],"representative_p":rep.physical[6],"representative_support_samples":rep.n_support_samples,"logL_full":logl_full,"logL_without_i":logl_without,"delta_logl_fixed":delta,"rho_cond_fixed":rho,"logL_full_initial":full_prof.logl_initial,"logL_full_profiled":full_prof.logl_profiled,"full_profile_success":full_prof.success,"full_profile_n_iter":full_prof.n_iter,"full_profile_gradient_norm":full_prof.gradient_norm,"full_profile_message":full_prof.message,"logL_without_i_initial":prof_without.logl_initial,"logL_without_i_profiled":prof_without.logl_profiled,"delta_logl_profiled":dprof,"rho_cond_profiled":rprof,"profile_success":prof_without.success,"profile_n_iter":prof_without.n_iter,"profile_gradient_norm":prof_without.gradient_norm,"profile_message":prof_without.message,"optimized_parameter_mask":",".join(settings.mask),"best_posterior_seed":"","best_posterior_draw_index":"","conditional_status":status,"diagnostic_only_fields":",".join(DIAGNOSTIC_ONLY_FIELDS)})
         rows.append(out)
     if len(reps)>1 and without_values and all(v == logl_full for v in without_values): raise AssertionError("all leave-one-out likelihoods are exactly identical to logL_full in a multi-candidate run")
     for row in rows: row["duplicate_of_source_id"]=""; row["mutually_exclusive_group"]=""
@@ -254,7 +452,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         theta=physical_catalogue_to_theta(physical, problem=full_problem); pert=theta.copy(); pert[0]+=1e-3; lp=float(full_problem.loglikelihood(pert)); print("integration_diagnostic changed_indices", np.flatnonzero(theta!=pert).tolist(), "logL", float(logl_full), lp, "profiled", rows[0].get("logL_full_profiled") if rows else None)
         if len(reps)>1:
             km1=problem_for_k(len(reps)-1); rem=float(km1.loglikelihood(physical_catalogue_to_theta(physical[1:], problem=km1))) if km1 else float('nan'); print("integration_diagnostic removal_logL", float(logl_full), rem, "finite", np.isfinite(rem), "optimizer_status", rows[0].get("profile_success"))
-    final=[r for r in rows if r.get("conditional_status")=="kept"]; write_csv(args.out_significance, rows); write_csv(args.out_final_catalogue, final)
+    final = [
+        r for r in rows
+        if r.get("conditional_status") in {"kept", "kept_profile_failed"}
+    ]
+    write_csv(args.out_significance, rows)
+    write_csv(args.out_final_catalogue, final)
     summary={"window_id":args.window_id,"n_input_candidates":len(all_rows),"n_union_candidates":len(cand),"optional_prefilters":{"minimum_mean_inclusion":args.minimum_mean_inclusion,"minimum_seed_support":args.minimum_seed_support,"allowed_sampling_quality":args.allowed_sampling_quality},"n_final_candidates":len(final),"max_posterior_logL":max_posterior_logl,"best_posterior_seed":bseed,"best_posterior_draw_index":bdraw,"logL_selected_baseline":baseline_logl,"logL_synthetic_joint_configuration":logl_full,"logL_full":logl_full,"logL_full_initial":rows[0].get("logL_full_initial") if rows else None,"logL_full_profiled":rows[0].get("logL_full_profiled") if rows else None,"truth_information_used_for_selection":False,"diagnostic_only_fields":DIAGNOSTIC_ONLY_FIELDS,"selection_rule":"profiled positive delta_logl_profiled threshold" if settings.enabled else "keep candidates with positive fixed-configuration delta_logl_fixed; profiled fields are diagnostics when profiling is disabled","profile_likelihood_enabled":settings.enabled,"optimized_parameter_mask":list(settings.mask),"optimizer":{"method":settings.method,"maxiter":settings.maxiter,"tol":settings.tol,"gtol":settings.gtol,"fail_on_unsuccessful":settings.fail_on_unsuccessful},"posterior_baseline_draws":args.posterior_baseline_draws,"interpretation":"rho_cond_profiled is a profiled likelihood-derived ranking statistic, not a calibrated physical SNR; K-dependent marginalization normalization may affect Delta log L interpretation.","assumptions":{"posterior_layout":"decoded physical [f0, fdot, iota, psi, lam, beta, p] per source slot","latent_parameterization":"problem.loglikelihood receives theta_u; representatives are inverse-packed with production transforms","representative_vector":"all seven physical parameters come from one posterior source component/draw nearest weighted median cluster frequency","synthetic_joint_configuration":"representatives for different clusters may come from different posterior draws or seeds, so the assembled vector is synthetic","source_removal":"candidate i is removed by constructing a K-1 problem and omitting its seven-parameter block, not by editing an ignored gate coordinate","k1_handling":"K=1 uses a K=0 baseline when supported, otherwise rows are marked unsupported_single_candidate_baseline"},"outputs":{"candidate_significance_csv":str(args.out_significance),"final_catalogue_csv":str(args.out_final_catalogue)}}
     Path(args.out_summary).parent.mkdir(parents=True, exist_ok=True); Path(args.out_summary).write_text(json.dumps(summary, indent=2), encoding="utf-8")
     for f in made:

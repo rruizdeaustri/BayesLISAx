@@ -31,6 +31,23 @@ consensus:
   p_index: 6
   p_active_min: 0.5
 
+conditional_likelihood:
+  minimum_mean_inclusion: 0.66
+  minimum_seed_support: null
+  allowed_sampling_quality: []
+
+  profile_likelihood: true
+  optimized_parameter_mask: [f0, fdot, lam, beta]
+
+  optimizer_method: Powell
+  optimizer_maxiter: 300
+  optimizer_tol: 1.0e-6
+  optimizer_gtol: 1.0e-5
+
+  profile_selection_min_delta: 0.0
+  posterior_baseline_draws: 100
+  run_integration_diagnostic: true
+
 # Small workflow-only check. Set workflow_mode: dry_run or pass --config workflow_mode=dry_run. Use with a one-row bands.csv.
 # Previous command-line overrides can still be supplied manually if desired.
 # Example: --config static_ns.k_values='[1,2]' static_ns.seeds='[0]' static_ns.n_live=32 static_ns.num_inner_steps=4 highres.n_live=32 highres.num_inner_steps=4
@@ -40,17 +57,6 @@ dry_run:
   seeds: [0]
   n_live: 32
   num_inner_steps: 4
-
-conditional_likelihood:
-  profile_likelihood: false
-  optimized_parameter_mask: [f0, fdot, lam, beta]
-  optimizer_method: L-BFGS-B
-  optimizer_maxiter: 100
-  optimizer_tol: 1.0e-6
-  optimizer_gtol: 1.0e-5
-  profile_selection_min_delta: 0.0
-  posterior_baseline_draws: 0
-  run_integration_diagnostic: false
 
 catalogue:
   margin_hz: 5.0e-6
