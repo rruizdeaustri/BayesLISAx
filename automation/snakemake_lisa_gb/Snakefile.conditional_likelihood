@@ -25,9 +25,23 @@ def conditional_prefilter_args():
         args.extend(str(value) for value in allowed)
     return " ".join(args)
 
-
 rule conditional_likelihood_all:
     input:
+        expand(
+            f"{RESULTS}/static_ns/conditional/"
+            f"{{band_id}}/candidate_significance.csv",
+            band_id=BAND_IDS,
+        ),
+        expand(
+            f"{RESULTS}/static_ns/conditional/"
+            f"{{band_id}}/final_catalogue.csv",
+            band_id=BAND_IDS,
+        ),
+        expand(
+            f"{RESULTS}/static_ns/conditional/"
+            f"{{band_id}}/provisional_catalogue.csv",
+            band_id=BAND_IDS,
+        ),
         expand(
             f"{RESULTS}/static_ns/conditional/"
             f"{{band_id}}/summary.json",
@@ -57,6 +71,10 @@ rule conditional_likelihood_selection:
         final_catalogue=(
             f"{RESULTS}/static_ns/conditional/"
             f"{{band_id}}/final_catalogue.csv"
+        ),
+        provisional=(
+            f"{RESULTS}/static_ns/conditional/"
+            f"{{band_id}}/provisional_catalogue.csv"
         ),
         summary=(
             f"{RESULTS}/static_ns/conditional/"
@@ -123,5 +141,6 @@ rule conditional_likelihood_selection:
           --posterior-baseline-draws {params.posterior_baseline_draws} \
           --out-significance {output.significance} \
           --out-final-catalogue {output.final_catalogue} \
+          --out-provisional-catalogue {output.provisional} \
           --out-summary {output.summary}
         """

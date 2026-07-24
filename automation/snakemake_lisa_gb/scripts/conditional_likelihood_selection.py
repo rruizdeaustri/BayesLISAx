@@ -2,14 +2,20 @@
 """Conditional-likelihood validation for multi-seed consensus candidates.
 
 This afterburner is downstream of consensus candidate selection. It validates
-all consensus clusters by default, treats BFDR/sampling/truth columns as
-diagnostics only, builds each representative from one complete posterior source
-block, and evaluates fixed plus optional profiled leave-one-out statistics with
-the production latent parameter flow.
+consensus clusters passing the configured inclusion prefilters, evaluates fixed
+and optional profiled leave-one-out likelihood statistics, and constructs the
+final catalogue by requiring both statistical selection and conditional-
+likelihood validation. Truth and catalogue-match columns remain diagnostic only.
 """
 from __future__ import annotations
 
-import argparse, csv, importlib, json, math, os, tempfile
+import argparse
+import csv
+import importlib
+import json
+import math
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
@@ -18,8 +24,30 @@ import numpy as np
 
 from within_window_consensus import PosteriorBundle, _normalized_weights, load_bundle
 
-DIAGNOSTIC_ONLY_FIELDS = ["statistically_selected", "posterior_inclusion_score", "sampling_quality", "local_fdr", "cumulative_bfdr", "bfdr", "catalogue_frequency_hz", "catalogue_approx_snr"]
-PROFILE_FIELDS = ["logL_full_initial", "logL_full_profiled", "logL_without_i_initial", "logL_without_i_profiled", "delta_logl_profiled", "rho_cond_profiled", "profile_success", "profile_n_iter", "profile_gradient_norm", "optimized_parameter_mask", "best_posterior_seed", "best_posterior_draw_index"]
+DIAGNOSTIC_ONLY_FIELDS = [
+    "posterior_inclusion_score",
+    "sampling_quality",
+    "local_fdr",
+    "cumulative_bfdr",
+    "bfdr",
+    "catalogue_frequency_hz",
+    "catalogue_approx_snr",
+]
+
+PROFILE_FIELDS = [
+    "logL_full_initial",
+    "logL_full_profiled",
+    "logL_without_i_initial",
+    "logL_without_i_profiled",
+    "delta_logl_profiled",
+    "rho_cond_profiled",
+    "profile_success",
+    "profile_n_iter",
+    "profile_gradient_norm",
+    "optimized_parameter_mask",
+    "best_posterior_seed",
+    "best_posterior_draw_index",
+]
 
 @dataclass(frozen=True)
 class RepresentativeCandidate:
@@ -67,8 +95,31 @@ def _as_int(row: dict[str, str], key: str, default: int = -1) -> int:
     try: return int(float(str(row.get(key, default)).strip()))
     except (TypeError, ValueError): return default
 
+def _as_bool(
+    row: dict[str, object],
+    key: str,
+    default: bool = False,
+) -> bool:
+    value = row.get(key, default)
+
+    if isinstance(value, bool):
+        return value
+
+    if value is None:
+        return default
+
+    text = str(value).strip().lower()
+
+    if text in {"true", "1", "yes", "y"}:
+        return True
+
+    if text in {"false", "0", "no", "n", ""}:
+        return False
+
+    return default
+    
 def selected_candidate_rows(rows: Sequence[dict[str, str]], *, minimum_mean_inclusion: float | None = None, minimum_seed_support: int | None = None, allowed_sampling_quality: set[str] | None = None) -> list[dict[str, str]]:
-    """Return consensus clusters to validate; BFDR/truth fields are diagnostics only."""
+    """Return unique consensus clusters passing the optional prefilters."""
     selected, seen = [], set()
     for row in rows:
         cluster_id = str(row.get("cluster_id", len(seen)))
@@ -431,13 +482,16 @@ def load_problem(config_path: str, factory: str) -> object:
     os.environ["JAX_SAMPLERS_CONFIG"]=config_path; mod, attr=factory.split(":",1); return getattr(importlib.import_module(mod), attr)()
 
 def main(argv: Sequence[str] | None = None) -> None:
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--candidates-csv", required=True); p.add_argument("--posteriors", nargs="+", required=True); p.add_argument("--config", required=True); p.add_argument("--window-id", required=True); p.add_argument("--dim-per", type=int, default=7); p.add_argument("--f0-index", type=int, default=0); p.add_argument("--p-index", type=int, default=6); p.add_argument("--p-active-min", type=float, default=0.5); p.add_argument("--minimum-mean-inclusion", type=float, default=None); p.add_argument("--minimum-seed-support", type=int, default=None); p.add_argument("--allowed-sampling-quality", nargs="*", default=None); p.add_argument("--representative-min-width-hz", type=float, default=0.0); p.add_argument("--duplicate-bins-hz", type=float, default=0.0); p.add_argument("--exclusive-drop-tol", type=float, default=0.0); p.add_argument("--run-integration-diagnostic", action="store_true"); p.add_argument("--profile-likelihood", action="store_true"); p.add_argument("--optimized-parameter-mask", nargs="+", default=["f0","fdot","lam","beta"]); p.add_argument("--optimizer-method", default="L-BFGS-B"); p.add_argument("--optimizer-maxiter", type=int, default=100); p.add_argument("--optimizer-tol", type=float, default=1e-6); p.add_argument("--optimizer-gtol", type=float, default=1e-5); p.add_argument("--profile-selection-min-delta", type=float, default=0.0); p.add_argument("--fail-on-unsuccessful-optimizer", action="store_true"); p.add_argument("--posterior-baseline-draws", type=int, default=0); p.add_argument("--problem-factory", default="jax_samplers.problems.lisa_gb_transdim_problem:make"); p.add_argument("--out-significance", required=True); p.add_argument("--out-final-catalogue", required=True); p.add_argument("--out-summary", required=True); args=p.parse_args(argv)
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--candidates-csv", required=True); p.add_argument("--posteriors", nargs="+", required=True); p.add_argument("--config", required=True); p.add_argument("--window-id", required=True); p.add_argument("--dim-per", type=int, default=7); p.add_argument("--f0-index", type=int, default=0); p.add_argument("--p-index", type=int, default=6); p.add_argument("--p-active-min", type=float, default=0.5); p.add_argument("--minimum-mean-inclusion", type=float, default=None); p.add_argument("--minimum-seed-support", type=int, default=None); p.add_argument("--allowed-sampling-quality", nargs="*", default=None); p.add_argument("--representative-min-width-hz", type=float, default=0.0); p.add_argument("--duplicate-bins-hz", type=float, default=0.0); p.add_argument("--exclusive-drop-tol", type=float, default=0.0); p.add_argument("--run-integration-diagnostic", action="store_true"); p.add_argument("--profile-likelihood", action="store_true"); p.add_argument("--optimized-parameter-mask", nargs="+", default=["f0","fdot","lam","beta"]); p.add_argument("--optimizer-method", default="L-BFGS-B"); p.add_argument("--optimizer-maxiter", type=int, default=100); p.add_argument("--optimizer-tol", type=float, default=1e-6); p.add_argument("--optimizer-gtol", type=float, default=1e-5); p.add_argument("--profile-selection-min-delta", type=float, default=0.0); p.add_argument("--fail-on-unsuccessful-optimizer", action="store_true"); p.add_argument("--posterior-baseline-draws", type=int, default=0); p.add_argument("--problem-factory", default="jax_samplers.problems.lisa_gb_transdim_problem:make"); p.add_argument("--out-significance", required=True); p.add_argument("--out-final-catalogue", required=True); p.add_argument("--out-provisional-catalogue", required=True); p.add_argument("--out-summary", required=True); args=p.parse_args(argv)
+    
     all_rows=read_csv_rows(args.candidates_csv); cand=selected_candidate_rows(all_rows, minimum_mean_inclusion=args.minimum_mean_inclusion, minimum_seed_support=args.minimum_seed_support, allowed_sampling_quality=set(args.allowed_sampling_quality) if args.allowed_sampling_quality else None)
+
     if not cand: raise ValueError("conditional validation received no candidates after optional prefilters")
     bundles=[load_bundle(x, dim_per=args.dim_per, f0_index=args.f0_index) for x in args.posteriors]; reps=build_representatives(cand,bundles,f0_index=args.f0_index,p_index=args.p_index,p_active_min=args.p_active_min,min_width_hz=args.representative_min_width_hz)
     full_problem=load_problem(args.config,args.problem_factory); kmax=int(getattr(full_problem,"Kmax"))
     if len(reps)>kmax: raise ValueError(f"conditional validation has {len(reps)} candidates after optional prefilters, but the configured likelihood has only Kmax={kmax} source slots. Increase model.Kmax or configure minimum_mean_inclusion=0.66, minimum_seed_support, or allowed_sampling_quality prefilters.")
     made=[]
+
     def problem_for_k(k:int):
         if k<0: return None
         if k==kmax: return full_problem
@@ -452,15 +506,158 @@ def main(argv: Sequence[str] | None = None) -> None:
         theta=physical_catalogue_to_theta(physical, problem=full_problem); pert=theta.copy(); pert[0]+=1e-3; lp=float(full_problem.loglikelihood(pert)); print("integration_diagnostic changed_indices", np.flatnonzero(theta!=pert).tolist(), "logL", float(logl_full), lp, "profiled", rows[0].get("logL_full_profiled") if rows else None)
         if len(reps)>1:
             km1=problem_for_k(len(reps)-1); rem=float(km1.loglikelihood(physical_catalogue_to_theta(physical[1:], problem=km1))) if km1 else float('nan'); print("integration_diagnostic removal_logL", float(logl_full), rem, "finite", np.isfinite(rem), "optimizer_status", rows[0].get("profile_success"))
+
     final = [
-        r for r in rows
-        if r.get("conditional_status") in {"kept", "kept_profile_failed"}
+        row
+        for row in rows
+        if (
+            _as_bool(row, "statistically_selected")
+            and (
+                (
+                    _as_bool(row, "profile_success")
+                    and row.get("conditional_status") == "kept"
+                )
+                if settings.enabled
+                else row.get("conditional_status") == "kept"
+            )
+        )
     ]
+
+    provisional = [
+        row
+        for row in rows
+        if (
+            row.get("quality") in {"robust", "plausible"}
+            and int(float(row.get("n_seed_support", 0) or 0)) >= 2
+            and (
+                (
+                    _as_bool(row, "profile_success")
+                    and row.get("conditional_status") == "kept"
+                )
+                if settings.enabled
+                else row.get("conditional_status") == "kept"
+            )
+        )
+    ]
+        
     write_csv(args.out_significance, rows)
     write_csv(args.out_final_catalogue, final)
-    summary={"window_id":args.window_id,"n_input_candidates":len(all_rows),"n_union_candidates":len(cand),"optional_prefilters":{"minimum_mean_inclusion":args.minimum_mean_inclusion,"minimum_seed_support":args.minimum_seed_support,"allowed_sampling_quality":args.allowed_sampling_quality},"n_final_candidates":len(final),"max_posterior_logL":max_posterior_logl,"best_posterior_seed":bseed,"best_posterior_draw_index":bdraw,"logL_selected_baseline":baseline_logl,"logL_synthetic_joint_configuration":logl_full,"logL_full":logl_full,"logL_full_initial":rows[0].get("logL_full_initial") if rows else None,"logL_full_profiled":rows[0].get("logL_full_profiled") if rows else None,"truth_information_used_for_selection":False,"diagnostic_only_fields":DIAGNOSTIC_ONLY_FIELDS,"selection_rule":"profiled positive delta_logl_profiled threshold" if settings.enabled else "keep candidates with positive fixed-configuration delta_logl_fixed; profiled fields are diagnostics when profiling is disabled","profile_likelihood_enabled":settings.enabled,"optimized_parameter_mask":list(settings.mask),"optimizer":{"method":settings.method,"maxiter":settings.maxiter,"tol":settings.tol,"gtol":settings.gtol,"fail_on_unsuccessful":settings.fail_on_unsuccessful},"posterior_baseline_draws":args.posterior_baseline_draws,"interpretation":"rho_cond_profiled is a profiled likelihood-derived ranking statistic, not a calibrated physical SNR; K-dependent marginalization normalization may affect Delta log L interpretation.","assumptions":{"posterior_layout":"decoded physical [f0, fdot, iota, psi, lam, beta, p] per source slot","latent_parameterization":"problem.loglikelihood receives theta_u; representatives are inverse-packed with production transforms","representative_vector":"all seven physical parameters come from one posterior source component/draw nearest weighted median cluster frequency","synthetic_joint_configuration":"representatives for different clusters may come from different posterior draws or seeds, so the assembled vector is synthetic","source_removal":"candidate i is removed by constructing a K-1 problem and omitting its seven-parameter block, not by editing an ignored gate coordinate","k1_handling":"K=1 uses a K=0 baseline when supported, otherwise rows are marked unsupported_single_candidate_baseline"},"outputs":{"candidate_significance_csv":str(args.out_significance),"final_catalogue_csv":str(args.out_final_catalogue)}}
-    Path(args.out_summary).parent.mkdir(parents=True, exist_ok=True); Path(args.out_summary).write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    for f in made:
-        try: os.unlink(f)
-        except OSError: pass
-if __name__ == "__main__": main()
+    write_csv(args.out_provisional_catalogue, provisional)
+
+    summary = {
+        "window_id": args.window_id,
+        "n_input_candidates": len(all_rows),
+        "n_union_candidates": len(cand),
+        "optional_prefilters": {
+            "minimum_mean_inclusion": args.minimum_mean_inclusion,
+            "minimum_seed_support": args.minimum_seed_support,
+            "allowed_sampling_quality": args.allowed_sampling_quality,
+        },
+        "n_statistically_selected": sum(
+            _as_bool(row, "statistically_selected") for row in rows
+        ),
+        "n_profile_success": sum(
+            _as_bool(row, "profile_success") for row in rows
+        ),
+        "n_final_candidates": len(final),
+        "n_provisional_candidates": len(provisional),
+        "max_posterior_logL": max_posterior_logl,
+        "best_posterior_seed": bseed,
+        "best_posterior_draw_index": bdraw,
+        "logL_selected_baseline": baseline_logl,
+        "logL_synthetic_joint_configuration": logl_full,
+        "logL_full": logl_full,
+        "logL_full_initial": (
+            rows[0].get("logL_full_initial") if rows else None
+        ),
+        "logL_full_profiled": (
+            rows[0].get("logL_full_profiled") if rows else None
+        ),
+        "truth_information_used_for_selection": False,
+        "diagnostic_only_fields": DIAGNOSTIC_ONLY_FIELDS,
+        "selection_rule": (
+            "require statistically_selected=True, successful likelihood "
+            "profiling, and delta_logl_profiled above "
+            "profile_selection_min_delta"
+            if settings.enabled
+            else (
+                "require statistically_selected=True and positive "
+                "fixed-configuration delta_logl_fixed"
+            )
+        ),
+        "catalogue_tiers": {
+            "final": (
+                "statistically_selected=True and conditional validation kept"
+            ),
+            "provisional": (
+                "quality in {robust, plausible}, seed support >= 2, "
+                "and conditional validation kept"
+            ),
+        },
+        "profile_likelihood_enabled": settings.enabled,
+        "optimized_parameter_mask": list(settings.mask),
+        "optimizer": {
+            "method": settings.method,
+            "maxiter": settings.maxiter,
+            "tol": settings.tol,
+            "gtol": settings.gtol,
+            "fail_on_unsuccessful": settings.fail_on_unsuccessful,
+        },
+        "posterior_baseline_draws": args.posterior_baseline_draws,
+        "interpretation": (
+            "rho_cond_profiled is a profiled likelihood-derived ranking "
+            "statistic, not a calibrated physical SNR; K-dependent "
+            "marginalization normalization may affect Delta log L "
+            "interpretation."
+        ),
+        "assumptions": {
+            "posterior_layout": (
+                "decoded physical [f0, fdot, iota, psi, lam, beta, p] "
+                "per source slot"
+            ),
+            "latent_parameterization": (
+                "problem.loglikelihood receives theta_u; representatives "
+                "are inverse-packed with production transforms"
+            ),
+            "representative_vector": (
+                "all seven physical parameters come from one posterior "
+                "source component/draw nearest weighted median cluster "
+                "frequency"
+            ),
+            "synthetic_joint_configuration": (
+                "representatives for different clusters may come from "
+                "different posterior draws or seeds, so the assembled "
+                "vector is synthetic"
+            ),
+            "source_removal": (
+                "candidate i is removed by constructing a K-1 problem and "
+                "omitting its seven-parameter block, not by editing an "
+                "ignored gate coordinate"
+            ),
+            "k1_handling": (
+                "K=1 uses a K=0 baseline when supported, otherwise rows "
+                "are marked unsupported_single_candidate_baseline"
+            ),
+        },
+        "outputs": {
+            "candidate_significance_csv": str(args.out_significance),
+            "final_catalogue_csv": str(args.out_final_catalogue),
+            "provisional_catalogue_csv": str(args.out_provisional_catalogue),
+        },
+    }
+
+    Path(args.out_summary).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out_summary).write_text(
+        json.dumps(summary, indent=2),
+        encoding="utf-8",
+    )
+
+    for filename in made:
+        try:
+            os.unlink(filename)
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    main()

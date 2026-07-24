@@ -547,6 +547,7 @@ rule catalogue_diagnostics:
             {params.match_args} \
             --tobs {params.tobs} \
             --margin-hz {params.margin} \
+            --match-radius-bins 5 \
             --snr-thresholds {params.th} \
             --top-n {params.top} \
             --out-summary {output.summary} \
