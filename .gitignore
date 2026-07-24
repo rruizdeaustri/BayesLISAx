@@ -13,3 +13,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+automation/snakemake_lisa_gb/bands.csv_first
+automation/snakemake_lisa_gb/bands_candidates.csv
+automation/snakemake_lisa_gb/bands_with_manual_00184.csv
+automation/snakemake_lisa_gb/jobs/
