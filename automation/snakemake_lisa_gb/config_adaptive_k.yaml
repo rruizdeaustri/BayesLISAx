@@ -1,0 +1,26 @@
+python: /r5/home/rruiz/software/miniconda3/envs/blackjax-ns/bin/python
+repo_root: /r5/home/rruiz/projects/sbi/BayesLISAx
+base_json: /r5/home/rruiz/projects/sbi/BayesLISAx/examples/json/lisa_gb_sangria_obs.json
+bands_csv: bands_test_3.csv
+output_root: results/adaptive_k
+
+adaptive_k:
+  problem_factory: jax_samplers.problems.lisa_gb_transdim_problem:make
+  initial_k_max: 4
+  safety_k_max: 10
+  confirm_lower_points: 2
+  min_peak_drop_logz: 10.0
+  spread_factor: 2.0
+  seed_consistency_logz: 100.0
+  min_consistent_seeds: 2
+  catastrophic_outlier_logz: 500.0
+  initial_seeds: [0, 11, 22]
+  extra_seeds: [33, 44, 55]
+  max_seeds_per_k: 5
+  n_live: 500
+  tol: 2.0
+  num_inner_steps: 64
+  num_delete_ratio: 0.1
+  initial_num_steps: 16
+  refinement_num_steps: 8
+  max_batches: 8

@@ -265,3 +265,32 @@ The campaign writes structured JSON per run and aggregate CSV tables under `resu
 - `nearest_catalogue_matches.csv`: nearest catalogue source in frequency for recovered high-resolution `f0` values; written only when `highres.enabled: true`.
 
 This reproduces the manual centered-band decision logic by comparing seed-maximized evidence across fixed K values, while retaining per-seed rows so crowded-window multimodality is visible.
+
+Adaptive K search
+----------------
+
+Install from the workflow directory:
+
+cp adaptive_k_search.py scripts/
+cp Snakefile.adaptive_k .
+cp config_adaptive_k.yaml .
+chmod +x scripts/adaptive_k_search.py
+
+Dry-run:
+
+snakemake -s Snakefile.adaptive_k --configfile config_adaptive_k.yaml -n -p --cores 1 all
+
+Run:
+
+nohup snakemake \
+  -s Snakefile.adaptive_k \
+  --configfile config_adaptive_k.yaml \
+  --cores 1 \
+  --rerun-incomplete \
+  --keep-going \
+  -p all \
+  > jobs/logs/adaptive_k_workflow.log 2>&1 &
+
+The controller reuses existing summaries, expands K one step at a time, adds seeds for unstable K points, confirms an interior peak only after two significantly lower later points, and returns model_order_unresolved at the safety cap.
+
+This first version parallelizes over bands, not over K or seeds inside a band.

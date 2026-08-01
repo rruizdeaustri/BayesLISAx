@@ -1,0 +1,77 @@
+configfile: "config_adaptive_k.yaml"
+
+import csv
+from pathlib import Path
+
+WORKFLOW_ROOT = Path(".").resolve()
+ADAPTIVE = config["adaptive_k"]
+PYTHON = config["python"]
+REPO_ROOT = config["repo_root"]
+BASE_JSON = config["base_json"]
+BANDS_CSV = config["bands_csv"]
+OUTPUT_ROOT = config.get("output_root", "results/adaptive_k")
+
+
+def load_bands(path):
+    with open(path, newline="") as handle:
+        return [
+            {"band_id": row["band_id"], "f_min": float(row["f_min"]), "f_max": float(row["f_max"])}
+            for row in csv.DictReader(handle)
+        ]
+
+
+BANDS = load_bands(BANDS_CSV)
+BAND_IDS = [row["band_id"] for row in BANDS]
+BAND_MAP = {row["band_id"]: row for row in BANDS}
+
+
+rule all:
+    input:
+        expand(f"{OUTPUT_ROOT}/{{band_id}}/state.json", band_id=BAND_IDS),
+        expand(f"{OUTPUT_ROOT}/{{band_id}}/k_summary.csv", band_id=BAND_IDS),
+
+
+rule adaptive_k_search:
+    output:
+        state=f"{OUTPUT_ROOT}/{{band_id}}/state.json",
+        summary=f"{OUTPUT_ROOT}/{{band_id}}/k_summary.csv",
+    params:
+        f_min=lambda wc: BAND_MAP[wc.band_id]["f_min"],
+        f_max=lambda wc: BAND_MAP[wc.band_id]["f_max"],
+        initial_seeds=",".join(str(x) for x in ADAPTIVE["initial_seeds"]),
+        extra_seeds=",".join(str(x) for x in ADAPTIVE["extra_seeds"]),
+    log:
+        "jobs/logs/adaptive_k/{band_id}.log",
+    shell:
+        r"""
+        mkdir -p $(dirname {log})
+        {PYTHON} scripts/adaptive_k_search.py \
+          --window-id {wildcards.band_id} \
+          --f-min {params.f_min} \
+          --f-max {params.f_max} \
+          --base-json {BASE_JSON} \
+          --repo-root {REPO_ROOT} \
+          --workflow-root {WORKFLOW_ROOT} \
+          --output-root {OUTPUT_ROOT} \
+          --python {PYTHON} \
+          --problem-factory {ADAPTIVE[problem_factory]} \
+          --initial-k-max {ADAPTIVE[initial_k_max]} \
+          --safety-k-max {ADAPTIVE[safety_k_max]} \
+          --confirm-lower-points {ADAPTIVE[confirm_lower_points]} \
+          --min-peak-drop-logz {ADAPTIVE[min_peak_drop_logz]} \
+          --spread-factor {ADAPTIVE[spread_factor]} \
+	  --seed-consistency-logz {ADAPTIVE[seed_consistency_logz]} \
+	  --min-consistent-seeds {ADAPTIVE[min_consistent_seeds]} \
+	  --catastrophic-outlier-logz {ADAPTIVE[catastrophic_outlier_logz]} \
+          --initial-seeds {params.initial_seeds} \
+          --extra-seeds {params.extra_seeds} \
+          --max-seeds-per-k {ADAPTIVE[max_seeds_per_k]} \
+          --n-live {ADAPTIVE[n_live]} \
+          --tol {ADAPTIVE[tol]} \
+          --num-inner-steps {ADAPTIVE[num_inner_steps]} \
+          --num-delete-ratio {ADAPTIVE[num_delete_ratio]} \
+          --initial-num-steps {ADAPTIVE[initial_num_steps]} \
+          --refinement-num-steps {ADAPTIVE[refinement_num_steps]} \
+          --max-batches {ADAPTIVE[max_batches]} \
+          > {log} 2>&1
+        """
