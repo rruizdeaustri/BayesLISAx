@@ -1,0 +1,101 @@
+configfile: "config_model_order_controller.yaml"
+
+import csv
+from pathlib import Path
+
+CFG = config["model_order_controller"]
+PYTHON = config["python"]
+REPO_ROOT = config["repo_root"]
+BASE_JSON = config["base_json"]
+BANDS_CSV = config["bands_csv"]
+OUTPUT_ROOT = config.get("output_root", "results/model_order")
+WORKFLOW_ROOT = Path(".").resolve()
+
+
+def load_bands(path):
+    with open(path, newline="") as handle:
+        return [{"band_id": r["band_id"], "f_min": float(r["f_min"]), "f_max": float(r["f_max"])} for r in csv.DictReader(handle)]
+
+BANDS = load_bands(BANDS_CSV)
+BAND_IDS = [x["band_id"] for x in BANDS]
+BAND_MAP = {x["band_id"]: x for x in BANDS}
+
+def repeated_args(flag, values):
+    return " ".join(f"{flag} {v}" for v in values)
+
+rule all:
+    input:
+        expand(f"{OUTPUT_ROOT}/{{band_id}}/state.json", band_id=BAND_IDS),
+        expand(f"{OUTPUT_ROOT}/{{band_id}}/selected_k.csv", band_id=BAND_IDS),
+        f"{OUTPUT_ROOT}/selected_k.csv",
+
+rule model_order_controller:
+    output:
+        state=f"{OUTPUT_ROOT}/{{band_id}}/state.json",
+        selected=f"{OUTPUT_ROOT}/{{band_id}}/selected_k.csv",
+        search=f"{OUTPUT_ROOT}/{{band_id}}/search_evidence.csv",
+        confirmation=f"{OUTPUT_ROOT}/{{band_id}}/confirmation_evidence.csv",
+    params:
+        f_min=lambda wc: BAND_MAP[wc.band_id]["f_min"],
+        f_max=lambda wc: BAND_MAP[wc.band_id]["f_max"],
+        search_seeds=",".join(str(x) for x in CFG["search_seeds"]),
+        confirmation_seeds=",".join(str(x) for x in CFG["confirmation_seeds"]),
+        reuse_args=lambda wc: repeated_args("--reuse-root", CFG.get("reuse_roots", [])),
+        skip_highres=lambda wc: "--skip-highres-confirmation" if CFG.get("skip_highres_confirmation", False) else "",
+    threads: 1
+    log:
+        "jobs/logs/model_order/{band_id}.log",
+    shell:
+        r"""
+        mkdir -p $(dirname {log})
+        export OMP_NUM_THREADS={threads}
+        export OPENBLAS_NUM_THREADS={threads}
+        export MKL_NUM_THREADS={threads}
+        export NUMEXPR_NUM_THREADS={threads}
+
+        {PYTHON} scripts/model_order_controller.py \
+          --window-id {wildcards.band_id} \
+          --f-min {params.f_min} --f-max {params.f_max} \
+          --base-json {BASE_JSON} --repo-root {REPO_ROOT} \
+          --workflow-root {WORKFLOW_ROOT} --output-root {OUTPUT_ROOT} \
+          --python {PYTHON} --problem-factory {CFG[problem_factory]} \
+          {params.reuse_args} \
+          --initial-k-max {CFG[initial_k_max]} --safety-k-max {CFG[safety_k_max]} \
+          --confirm-lower-points {CFG[confirm_lower_points]} \
+          --min-peak-drop-logz {CFG[min_peak_drop_logz]} \
+          --pair-agreement-logz {CFG[pair_agreement_logz]} \
+          --search-seeds {params.search_seeds} \
+          --search-n-live {CFG[search_n_live]} --search-tol {CFG[search_tol]} \
+          --search-num-inner-steps {CFG[search_num_inner_steps]} \
+          --search-num-delete-ratio {CFG[search_num_delete_ratio]} \
+          --search-initial-num-steps {CFG[search_initial_num_steps]} \
+          --search-refinement-num-steps {CFG[search_refinement_num_steps]} \
+          --search-max-batches {CFG[search_max_batches]} \
+          {params.skip_highres} \
+          --confirmation-seeds {params.confirmation_seeds} \
+          --highres-n-live {CFG[highres_n_live]} --highres-tol {CFG[highres_tol]} \
+          --highres-num-inner-steps {CFG[highres_num_inner_steps]} \
+          --highres-num-delete-ratio {CFG[highres_num_delete_ratio]} \
+          --highres-initial-num-steps {CFG[highres_initial_num_steps]} \
+          --highres-refinement-num-steps {CFG[highres_refinement_num_steps]} \
+          --highres-max-batches {CFG[highres_max_batches]} \
+          --max-confirmation-extensions {CFG[max_confirmation_extensions]} \
+          --min-confirmation-rise-logz {CFG[min_confirmation_rise_logz]} \
+          > {log} 2>&1
+        """
+
+rule aggregate_selected_k:
+    input:
+        expand(f"{OUTPUT_ROOT}/{{band_id}}/selected_k.csv", band_id=BAND_IDS),
+    output:
+        f"{OUTPUT_ROOT}/selected_k.csv",
+    run:
+        rows = []
+        for path in input:
+            with open(path, newline="") as handle:
+                rows.extend(csv.DictReader(handle))
+        fields = ["window_id", "f_min", "f_max", "K_best", "status", "next_action", "reason"]
+        Path(output[0]).parent.mkdir(parents=True, exist_ok=True)
+        with open(output[0], "w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader(); writer.writerows(rows)

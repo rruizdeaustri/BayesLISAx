@@ -1,0 +1,39 @@
+python: /r5/home/rruiz/software/miniconda3/envs/blackjax-ns/bin/python
+repo_root: /r5/home/rruiz/projects/sbi/BayesLISAx
+base_json: /r5/home/rruiz/projects/sbi/BayesLISAx/examples/json/lisa_gb_sangria_obs.json
+bands_csv: bands_gb0004.csv
+output_root: results/model_order
+
+model_order_controller:
+  problem_factory: jax_samplers.problems.lisa_gb_transdim_problem:make
+  reuse_roots:
+    - results/static_ns
+    - results/adaptive_k
+
+  initial_k_max: 4
+  safety_k_max: 10
+  confirm_lower_points: 2
+  min_peak_drop_logz: 20.0
+  pair_agreement_logz: 150.0
+  search_seeds: [0, 11, 22]
+
+  search_n_live: 500
+  search_tol: 2.0
+  search_num_inner_steps: 64
+  search_num_delete_ratio: 0.1
+  search_initial_num_steps: 16
+  search_refinement_num_steps: 8
+  search_max_batches: 8
+
+  skip_highres_confirmation: false
+  confirmation_seeds: [0, 11, 22]
+  highres_n_live: 1000
+  highres_tol: 1.0
+  highres_num_inner_steps: 128
+  highres_num_delete_ratio: 0.1
+  highres_initial_num_steps: 32
+  highres_refinement_num_steps: 16
+  highres_max_batches: 12
+  
+  max_confirmation_extensions: 2
+  min_confirmation_rise_logz: 20.0
