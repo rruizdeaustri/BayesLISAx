@@ -1,0 +1,35 @@
+python: /r5/home/rruiz/software/miniconda3/envs/blackjax-ns/bin/python
+
+repo_root: /r5/home/rruiz/projects/sbi/BayesLISAx
+
+base_json: /r5/home/rruiz/projects/sbi/BayesLISAx/examples/json/lisa_gb_sangria_obs.json
+
+model_order_root: results/model_order
+
+output_root: results/stability_consensus
+
+bands:
+  - gb_0004
+  - gb_0009
+
+stability_consensus:
+  problem_factory: jax_samplers.problems.lisa_gb_transdim_problem:make
+
+  seeds:
+    - 33
+    - 44
+    - 55
+
+  n_live: 1000
+  tol: 1.0
+
+  num_inner_steps: 128
+  num_delete_ratio: 0.1
+
+  initial_num_steps: 32
+  refinement_num_steps: 16
+
+  max_batches: 12
+
+  min_support_fraction: 0.6666666667
+  min_median_delta_margin: 20.0

@@ -1,0 +1,168 @@
+configfile: "config_stability_consensus.yaml"
+
+import csv
+from pathlib import Path
+
+
+PYTHON = config["python"]
+REPO_ROOT = config["repo_root"]
+BASE_JSON = config["base_json"]
+
+MODEL_ORDER_ROOT = config.get(
+    "model_order_root",
+    "results/model_order",
+)
+
+OUTPUT_ROOT = config.get(
+    "output_root",
+    "results/stability_consensus",
+)
+
+BANDS = config["bands"]
+
+CFG = config[
+    "stability_consensus"
+]
+
+WORKFLOW_ROOT = Path(
+    "."
+).resolve()
+
+
+rule all:
+    input:
+        expand(
+            f"{OUTPUT_ROOT}/{{band_id}}/state.json",
+            band_id=BANDS,
+        ),
+        expand(
+            f"{OUTPUT_ROOT}/{{band_id}}/consensus.csv",
+            band_id=BANDS,
+        ),
+        f"{OUTPUT_ROOT}/consensus.csv",
+
+
+rule stability_consensus:
+    input:
+        model_state=(
+            f"{MODEL_ORDER_ROOT}/"
+            "{band_id}/state.json"
+        ),
+    output:
+        state=(
+            f"{OUTPUT_ROOT}/"
+            "{band_id}/state.json"
+        ),
+        consensus=(
+            f"{OUTPUT_ROOT}/"
+            "{band_id}/consensus.csv"
+        ),
+        new_evidence=(
+            f"{OUTPUT_ROOT}/"
+            "{band_id}/new_seed_evidence.csv"
+        ),
+        combined_evidence=(
+            f"{OUTPUT_ROOT}/"
+            "{band_id}/combined_evidence.csv"
+        ),
+    params:
+        seeds=",".join(
+            str(seed)
+            for seed in CFG["seeds"]
+        ),
+    threads:
+        1
+    log:
+        "jobs/logs/stability_consensus/{band_id}.log",
+    shell:
+        r"""
+        mkdir -p $(dirname {log})
+
+        export OMP_NUM_THREADS={threads}
+        export OPENBLAS_NUM_THREADS={threads}
+        export MKL_NUM_THREADS={threads}
+        export NUMEXPR_NUM_THREADS={threads}
+
+        {PYTHON} scripts/stability_consensus.py \
+          --window-id {wildcards.band_id} \
+          --model-order-root {MODEL_ORDER_ROOT} \
+          --output-root {OUTPUT_ROOT} \
+          --base-json {BASE_JSON} \
+          --repo-root {REPO_ROOT} \
+          --workflow-root {WORKFLOW_ROOT} \
+          --python {PYTHON} \
+          --problem-factory {CFG[problem_factory]} \
+          --seeds {params.seeds} \
+          --n-live {CFG[n_live]} \
+          --tol {CFG[tol]} \
+          --num-inner-steps {CFG[num_inner_steps]} \
+          --num-delete-ratio {CFG[num_delete_ratio]} \
+          --initial-num-steps {CFG[initial_num_steps]} \
+          --refinement-num-steps {CFG[refinement_num_steps]} \
+          --max-batches {CFG[max_batches]} \
+          --min-support-fraction {CFG[min_support_fraction]} \
+          --min-median-delta-margin {CFG[min_median_delta_margin]} \
+          > {log} 2>&1
+        """
+
+
+rule aggregate_consensus:
+    input:
+        expand(
+            f"{OUTPUT_ROOT}/{{band_id}}/consensus.csv",
+            band_id=BANDS,
+        ),
+    output:
+        f"{OUTPUT_ROOT}/consensus.csv",
+    run:
+        rows = []
+
+        for path in input:
+            with open(
+                path,
+                newline="",
+            ) as handle:
+                rows.extend(
+                    csv.DictReader(
+                        handle
+                    )
+                )
+
+        fields = [
+            "window_id",
+            "f_min",
+            "f_max",
+            "selected_k",
+            "new_seed_best_k",
+            "new_selected_support",
+            "new_n_seeds",
+            "combined_best_k",
+            "combined_selected_support",
+            "combined_n_seeds",
+            "combined_margin",
+            "status",
+            "next_action",
+            "reason",
+        ]
+
+        Path(
+            output[0]
+        ).parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        with open(
+            output[0],
+            "w",
+            newline="",
+        ) as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=fields,
+            )
+
+            writer.writeheader()
+            writer.writerows(
+                rows
+            )
