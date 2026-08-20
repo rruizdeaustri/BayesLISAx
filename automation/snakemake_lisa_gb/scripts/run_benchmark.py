@@ -376,6 +376,14 @@ def main():
         env=env,
     )
 
+    if completed.returncode == 0:
+        ensure_posterior_metadata(
+            posterior_path,
+            seed=args.seed,
+            algo=args.algo,
+            config_path=args.config_json,
+        )
+    
     runtime = (
         time.time()
         - start_time
@@ -697,6 +705,51 @@ def main():
         completed.returncode
     )
 
+def ensure_posterior_metadata(
+    posterior_path: Path,
+    *,
+    seed: int,
+    algo: str,
+    config_path: str,
+) -> None:
+    """
+    Ensure posterior.npz contains correct identifying metadata.
+
+    SamplerResult writes the posterior arrays, but older/current
+    implementations may leave the scalar seed field empty.
+    """
+    if not posterior_path.exists():
+        return
+
+    import numpy as np
+
+    with np.load(
+        posterior_path,
+        allow_pickle=False,
+    ) as npz:
+        payload = {
+            key: npz[key]
+            for key in npz.files
+        }
+
+    payload["seed"] = np.asarray(
+        str(seed)
+    )
+
+    payload["algo"] = np.asarray(
+        str(algo)
+    )
+
+    payload["config_path"] = np.asarray(
+        str(
+            Path(config_path).resolve()
+        )
+    )
+
+    np.savez_compressed(
+        posterior_path,
+        **payload,
+    )
 
 if __name__ == "__main__":
     raise SystemExit(
